@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+plotly
+pyyaml
+wordcloud
+matplotlib
+youtube-search
+youtube-comment-downloader
