@@ -1,0 +1,57 @@
+# YouTube Dashboard Configuration
+
+# Maximum number of videos to fetch in search results
+max_videos: 10
+
+# Maximum number of comments to fetch per video
+max_comments: 100
+
+# Maximum number of words in word cloud visualization
+wordcloud_max_words: 100
+
+# Maximum number of characters to display in video titles
+title_max_chars: 60
+
+# Common stopwords to exclude from word clouds
+stopwords:
+  - the
+  - and
+  - is
+  - to
+  - in
+  - of
+  - a
+  - for
+  - that
+  - this
+  - it
+  - you
+  - i
+  - he
+  - she
+  - they
+  - we
+  - on
+  - at
+  - with
+  - by
+  - from
+  - as
+  - or
+  - but
+  - not
+  - be
+  - are
+  - was
+  - were
+  - has
+  - have
+  - had
+  - do
+  - does
+  - did
+  - can
+  - could
+  - will
+  - would
+  - should
