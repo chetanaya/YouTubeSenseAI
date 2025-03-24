@@ -142,7 +142,7 @@ def create_wordcloud(text, max_words=100, stopwords=None):
     # Create default wordcloud with no custom stopwords
     wc = WordCloud(
         width=800,
-        height=400,
+        height=800,
         background_color="white",
         max_words=max_words,
         contour_width=3,
