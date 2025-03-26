@@ -7,3 +7,7 @@ wordcloud
 matplotlib
 youtube-search
 youtube-comment-downloader
+langchain
+langchain-community
+langchain-openai
+openai
