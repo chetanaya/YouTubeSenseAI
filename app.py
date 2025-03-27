@@ -2,18 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 import yaml
 import base64
 from itertools import islice
 from collections import Counter
 import re
-from datetime import datetime
 import os
-import time
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-from io import BytesIO
 
 # Import YouTube search and comment downloader
 from youtube_search import YoutubeSearch
@@ -96,7 +92,7 @@ h4 {
 @st.cache_data
 def load_config():
     try:
-        with open("config.yaml", "r") as file:
+        with open(file="config.yaml", mode="r", encoding="utf-8") as file:
             return yaml.safe_load(file)
     except FileNotFoundError:
         # Default configuration if file not found
