@@ -14,9 +14,20 @@ from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
+from modules.nav import Navbar
 
 # Load environment variables
 load_dotenv()
+
+# Set page configuration
+st.set_page_config(
+    page_title="YouTube Transcript Analysis Dashboard",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+Navbar()
 
 
 def extract_video_id(url):

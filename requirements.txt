@@ -14,3 +14,6 @@ langchain-openai
 openai
 langgraph
 faiss-cpu
+yt-dlp
+pydub
+librosa
