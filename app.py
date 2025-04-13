@@ -20,8 +20,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 
-# Import transcript analysis module
-import transcript_analysis
+from modules.nav import Navbar
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +32,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+Navbar()
 
 # Add custom CSS for table-like layout
 st.markdown(
@@ -479,626 +480,602 @@ def create_phrase_heatmap(phrases):
 
 # Main app
 def main():
-    # Add navigation menu
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio(
-        "Go to", ["YouTube Comment Analysis", "Transcript Analysis"]
-    )
+    # Original comment analysis dashboard
+    st.title("YouTube Comment Analysis Dashboard")
 
-    if page == "Transcript Analysis":
-        # Call the transcript analysis app
-        transcript_analysis.app()
-    else:
-        # Original comment analysis dashboard
-        st.title("YouTube Comment Analysis Dashboard")
+    # Initialize session state variables for AI analysis
+    if "sentiment_results" not in st.session_state:
+        st.session_state.sentiment_results = None
+    if "phrases" not in st.session_state:
+        st.session_state.phrases = None
+    if "summary" not in st.session_state:
+        st.session_state.summary = None
 
-        # Initialize session state variables for AI analysis
-        if "sentiment_results" not in st.session_state:
+    # Sidebar for search and API settings
+    with st.sidebar:
+        st.header("API Settings")
+        openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        if not openai_api_key:
+            openai_api_key = st.text_input("OpenAI API Key", type="password")
+            if openai_api_key:
+                os.environ["OPENAI_API_KEY"] = openai_api_key
+
+        st.header("Search Settings")
+        search_query = st.text_input("Enter search keyword", "")
+        max_videos = st.slider("Maximum number of videos", 5, 30, config["max_videos"])
+        max_comments = st.slider(
+            "Maximum comments per video", 50, 500, config["max_comments"]
+        )
+        title_max_chars = st.slider(
+            "Title max characters", 30, 100, config.get("title_max_chars", 60)
+        )
+        include_shorts = st.toggle("Include YouTube Shorts", value=True)
+
+        search_button = st.button("Search YouTube")
+
+        st.markdown("---")
+
+        # NEW: LLM Model Selection
+        st.header("AI Analysis Settings")
+        llm_model = st.selectbox(
+            "LLM Model", ["gpt-4o-mini", "gpt-4", "gpt-4o"], key="llm_model"
+        )
+
+    # Initialize session state variables
+    if "search_results" not in st.session_state:
+        st.session_state.search_results = []
+    if "selected_videos" not in st.session_state:
+        st.session_state.selected_videos = []
+    if "comments_df" not in st.session_state:
+        st.session_state.comments_df = pd.DataFrame()
+    if "last_search" not in st.session_state:
+        st.session_state.last_search = ""
+
+    # Search YouTube when button is clicked
+    if search_button and search_query:
+        with st.spinner(f"Searching YouTube for '{search_query}'..."):
+            st.session_state.search_results = search_youtube(
+                search_query, max_results=max_videos
+            )
+            st.session_state.last_search = search_query
+            st.session_state.selected_videos = []
+            st.session_state.comments_df = pd.DataFrame()
             st.session_state.sentiment_results = None
-        if "phrases" not in st.session_state:
             st.session_state.phrases = None
-        if "summary" not in st.session_state:
             st.session_state.summary = None
 
-        # Sidebar for search and API settings
-        with st.sidebar:
-            st.header("API Settings")
-            openai_api_key = os.getenv("OPENAI_API_KEY", "")
-            if not openai_api_key:
-                openai_api_key = st.text_input("OpenAI API Key", type="password")
-                if openai_api_key:
-                    os.environ["OPENAI_API_KEY"] = openai_api_key
+    # Display search results
+    if st.session_state.search_results:
+        st.subheader(f"Search Results for '{st.session_state.last_search}'")
 
-            st.header("Search Settings")
-            search_query = st.text_input("Enter search keyword", "")
-            max_videos = st.slider(
-                "Maximum number of videos", 5, 30, config["max_videos"]
-            )
-            max_comments = st.slider(
-                "Maximum comments per video", 50, 500, config["max_comments"]
-            )
-            title_max_chars = st.slider(
-                "Title max characters", 30, 100, config.get("title_max_chars", 60)
-            )
-            include_shorts = st.toggle("Include YouTube Shorts", value=True)
+        # Filter results based on the toggle switch
+        results_to_display = st.session_state.search_results
+        if not include_shorts:
+            results_to_display = [
+                video
+                for video in results_to_display
+                if not is_short(video["url_suffix"])
+            ]
+            st.info("YouTube Shorts are excluded from the results.")
 
-            search_button = st.button("Search YouTube")
+        if not results_to_display:
+            st.warning("No videos found matching your criteria (excluding Shorts).")
+            return
 
+        selected_video_ids = []
+
+        # Convert search results to a nicer format for display
+        formatted_results = []
+
+        for video in results_to_display:
+            video_id = video["id"]
+            title = video["title"]
+            channel = video["channel"]
+            views = video["views"]
+            duration = video["duration"]
+            video_type = "Short" if is_short(video["url_suffix"]) else "Video"
+
+            # Create URL to the video
+            base_url = "https://www.youtube.com"
+            full_url = f"{base_url}{video['url_suffix']}"
+
+            # Truncate title if needed
+            display_title = truncate_text(title, title_max_chars)
+
+            # Add to formatted results
+            formatted_results.append(
+                {
+                    "id": video_id,
+                    "title": display_title,
+                    "full_title": title,
+                    "thumbnail": video["thumbnails"][0],
+                    "channel": channel,
+                    "views": views,
+                    "duration": duration,
+                    "type": video_type,
+                    "url": full_url,
+                    "original": video,
+                }
+            )
+
+        # Display videos in a table format
+        for i, video in enumerate(formatted_results):
+            col1, col2, col3 = st.columns([1, 3, 1])
+
+            # Column 1: Thumbnail
+            with col1:
+                st.image(video["thumbnail"], use_container_width=True)
+
+            # Column 2: Title and metadata
+            with col2:
+                st.markdown(f"#### {video['title']}")
+                st.caption(
+                    f"**Channel:** {video['channel']} | **Views:** {video['views']} | **Duration:** {video['duration']} | **Type:** {video['type']}"
+                )
+
+            # Column 3: Actions
+            with col3:
+                st.markdown(f"[Watch Video]({video['url']})")
+                selected = st.checkbox("Analyze", key=f"select_{video['id']}")
+                if selected:
+                    selected_video_ids.append(video["original"])
+
+            # Add a divider between videos
             st.markdown("---")
 
-            # NEW: LLM Model Selection
-            st.header("AI Analysis Settings")
-            llm_model = st.selectbox(
-                "LLM Model", ["gpt-4o-mini", "gpt-4", "gpt-4o"], key="llm_model"
-            )
+        # Process selected videos
+        if selected_video_ids:
+            st.subheader("Selected Videos for Analysis")
 
-        # Initialize session state variables
-        if "search_results" not in st.session_state:
-            st.session_state.search_results = []
-        if "selected_videos" not in st.session_state:
-            st.session_state.selected_videos = []
-        if "comments_df" not in st.session_state:
-            st.session_state.comments_df = pd.DataFrame()
-        if "last_search" not in st.session_state:
-            st.session_state.last_search = ""
+            # Button to fetch comments for selected videos
+            if st.button("Fetch Comments for Selected Videos"):
+                all_comments = []
+                progress_bar = st.progress(0)
 
-        # Search YouTube when button is clicked
-        if search_button and search_query:
-            with st.spinner(f"Searching YouTube for '{search_query}'..."):
-                st.session_state.search_results = search_youtube(
-                    search_query, max_results=max_videos
-                )
-                st.session_state.last_search = search_query
-                st.session_state.selected_videos = []
-                st.session_state.comments_df = pd.DataFrame()
-                st.session_state.sentiment_results = None
-                st.session_state.phrases = None
-                st.session_state.summary = None
+                for i, video in enumerate(selected_video_ids):
+                    video_id = video["id"]
+                    title = video["title"]
+                    url_suffix = video["url_suffix"]
 
-        # Display search results
-        if st.session_state.search_results:
-            st.subheader(f"Search Results for '{st.session_state.last_search}'")
+                    # Create full URL
+                    base_url = "https://www.youtube.com"
+                    full_url = f"{base_url}{url_suffix}"
 
-            # Filter results based on the toggle switch
-            results_to_display = st.session_state.search_results
-            if not include_shorts:
-                results_to_display = [
-                    video
-                    for video in results_to_display
-                    if not is_short(video["url_suffix"])
-                ]
-                st.info("YouTube Shorts are excluded from the results.")
+                    with st.spinner(f"Fetching comments for '{title}'..."):
+                        comments = fetch_comments(full_url, max_comments=max_comments)
+                        if comments:
+                            video_df = comments_to_df(comments, video_id, title)
+                            all_comments.append(video_df)
 
-            if not results_to_display:
-                st.warning("No videos found matching your criteria (excluding Shorts).")
-                return
+                    # Update progress bar
+                    progress_bar.progress((i + 1) / len(selected_video_ids))
 
-            selected_video_ids = []
-
-            # Convert search results to a nicer format for display
-            formatted_results = []
-
-            for video in results_to_display:
-                video_id = video["id"]
-                title = video["title"]
-                channel = video["channel"]
-                views = video["views"]
-                duration = video["duration"]
-                video_type = "Short" if is_short(video["url_suffix"]) else "Video"
-
-                # Create URL to the video
-                base_url = "https://www.youtube.com"
-                full_url = f"{base_url}{video['url_suffix']}"
-
-                # Truncate title if needed
-                display_title = truncate_text(title, title_max_chars)
-
-                # Add to formatted results
-                formatted_results.append(
-                    {
-                        "id": video_id,
-                        "title": display_title,
-                        "full_title": title,
-                        "thumbnail": video["thumbnails"][0],
-                        "channel": channel,
-                        "views": views,
-                        "duration": duration,
-                        "type": video_type,
-                        "url": full_url,
-                        "original": video,
-                    }
-                )
-
-            # Display videos in a table format
-            for i, video in enumerate(formatted_results):
-                col1, col2, col3 = st.columns([1, 3, 1])
-
-                # Column 1: Thumbnail
-                with col1:
-                    st.image(video["thumbnail"], use_container_width=True)
-
-                # Column 2: Title and metadata
-                with col2:
-                    st.markdown(f"#### {video['title']}")
-                    st.caption(
-                        f"**Channel:** {video['channel']} | **Views:** {video['views']} | **Duration:** {video['duration']} | **Type:** {video['type']}"
+                if all_comments:
+                    # Combine all comments into one DataFrame
+                    st.session_state.comments_df = pd.concat(
+                        all_comments, ignore_index=True
                     )
+                    st.session_state.selected_videos = selected_video_ids
+                    # Reset AI analysis results when new comments are fetched
+                    st.session_state.sentiment_results = None
+                    st.session_state.phrases = None
+                    st.session_state.summary = None
+                    st.success(
+                        f"Successfully fetched comments for {len(selected_video_ids)} videos!"
+                    )
+                else:
+                    st.error("No comments were retrieved. Try different videos.")
 
-                # Column 3: Actions
-                with col3:
-                    st.markdown(f"[Watch Video]({video['url']})")
-                    selected = st.checkbox("Analyze", key=f"select_{video['id']}")
-                    if selected:
-                        selected_video_ids.append(video["original"])
+            # Display analysis if comments are available
+            if not st.session_state.comments_df.empty:
+                st.subheader("Comment Analysis")
 
-                # Add a divider between videos
-                st.markdown("---")
+                # Create tabs for different analyses
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                    [
+                        "Comments Table",
+                        "Word Clouds",
+                        "AI Sentiment Analysis",
+                        "Engagement Metrics",
+                        "AI Summary & Insights",
+                    ]
+                )
 
-            # Process selected videos
-            if selected_video_ids:
-                st.subheader("Selected Videos for Analysis")
-
-                # Button to fetch comments for selected videos
-                if st.button("Fetch Comments for Selected Videos"):
-                    all_comments = []
-                    progress_bar = st.progress(0)
-
-                    for i, video in enumerate(selected_video_ids):
+                with tab1:
+                    # Show comments in expandable containers grouped by video
+                    for video in st.session_state.selected_videos:
                         video_id = video["id"]
                         title = video["title"]
-                        url_suffix = video["url_suffix"]
 
-                        # Create full URL
-                        base_url = "https://www.youtube.com"
-                        full_url = f"{base_url}{url_suffix}"
+                        video_comments = st.session_state.comments_df[
+                            st.session_state.comments_df["video_id"] == video_id
+                        ]
 
-                        with st.spinner(f"Fetching comments for '{title}'..."):
-                            comments = fetch_comments(
-                                full_url, max_comments=max_comments
-                            )
-                            if comments:
-                                video_df = comments_to_df(comments, video_id, title)
-                                all_comments.append(video_df)
+                        if not video_comments.empty:
+                            with st.expander(
+                                f"{title} ({len(video_comments)} comments)"
+                            ):
+                                st.dataframe(
+                                    video_comments[
+                                        [
+                                            "author",
+                                            "text",
+                                            "time",
+                                            "votes",
+                                            "replies",
+                                        ]
+                                    ],
+                                    use_container_width=True,
+                                )
 
-                        # Update progress bar
-                        progress_bar.progress((i + 1) / len(selected_video_ids))
+                with tab2:
+                    # Generate word clouds for each video
+                    for video in st.session_state.selected_videos:
+                        video_id = video["id"]
+                        title = video["title"]
 
-                    if all_comments:
-                        # Combine all comments into one DataFrame
-                        st.session_state.comments_df = pd.concat(
-                            all_comments, ignore_index=True
-                        )
-                        st.session_state.selected_videos = selected_video_ids
-                        # Reset AI analysis results when new comments are fetched
-                        st.session_state.sentiment_results = None
-                        st.session_state.phrases = None
-                        st.session_state.summary = None
-                        st.success(
-                            f"Successfully fetched comments for {len(selected_video_ids)} videos!"
+                        video_comments = st.session_state.comments_df[
+                            st.session_state.comments_df["video_id"] == video_id
+                        ]
+
+                        if not video_comments.empty:
+                            with st.expander(f"Word Cloud for: {title}"):
+                                # Combine all comments into a single text
+                                all_text = " ".join(video_comments["text"].astype(str))
+                                processed_text = preprocess_text(all_text)
+
+                                if processed_text:
+                                    wordcloud_fig = create_wordcloud(
+                                        processed_text,
+                                        max_words=config["wordcloud_max_words"],
+                                        stopwords=config["stopwords"],
+                                    )
+                                    st.pyplot(wordcloud_fig)
+                                else:
+                                    st.info("Not enough text to generate a word cloud.")
+
+                with tab3:
+                    # NEW: Advanced AI-powered sentiment analysis
+                    if not openai_api_key:
+                        st.warning(
+                            "Please enter your OpenAI API key in the sidebar to enable AI sentiment analysis."
                         )
                     else:
-                        st.error("No comments were retrieved. Try different videos.")
-
-                # Display analysis if comments are available
-                if not st.session_state.comments_df.empty:
-                    st.subheader("Comment Analysis")
-
-                    # Create tabs for different analyses
-                    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-                        [
-                            "Comments Table",
-                            "Word Clouds",
-                            "AI Sentiment Analysis",
-                            "Engagement Metrics",
-                            "AI Summary & Insights",
-                        ]
-                    )
-
-                    with tab1:
-                        # Show comments in expandable containers grouped by video
-                        for video in st.session_state.selected_videos:
-                            video_id = video["id"]
-                            title = video["title"]
-
-                            video_comments = st.session_state.comments_df[
-                                st.session_state.comments_df["video_id"] == video_id
-                            ]
-
-                            if not video_comments.empty:
-                                with st.expander(
-                                    f"{title} ({len(video_comments)} comments)"
-                                ):
-                                    st.dataframe(
-                                        video_comments[
-                                            [
-                                                "author",
-                                                "text",
-                                                "time",
-                                                "votes",
-                                                "replies",
-                                            ]
-                                        ],
-                                        use_container_width=True,
-                                    )
-
-                    with tab2:
-                        # Generate word clouds for each video
-                        for video in st.session_state.selected_videos:
-                            video_id = video["id"]
-                            title = video["title"]
-
-                            video_comments = st.session_state.comments_df[
-                                st.session_state.comments_df["video_id"] == video_id
-                            ]
-
-                            if not video_comments.empty:
-                                with st.expander(f"Word Cloud for: {title}"):
-                                    # Combine all comments into a single text
-                                    all_text = " ".join(
-                                        video_comments["text"].astype(str)
-                                    )
-                                    processed_text = preprocess_text(all_text)
-
-                                    if processed_text:
-                                        wordcloud_fig = create_wordcloud(
-                                            processed_text,
-                                            max_words=config["wordcloud_max_words"],
-                                            stopwords=config["stopwords"],
-                                        )
-                                        st.pyplot(wordcloud_fig)
-                                    else:
-                                        st.info(
-                                            "Not enough text to generate a word cloud."
-                                        )
-
-                    with tab3:
-                        # NEW: Advanced AI-powered sentiment analysis
-                        if not openai_api_key:
-                            st.warning(
-                                "Please enter your OpenAI API key in the sidebar to enable AI sentiment analysis."
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.write(
+                                "This tab uses AI to analyze the sentiment of each comment."
                             )
-                        else:
-                            col1, col2 = st.columns([3, 1])
-                            with col1:
-                                st.write(
-                                    "This tab uses AI to analyze the sentiment of each comment."
-                                )
-                            with col2:
-                                run_analysis = st.button("Run AI Analysis")
+                        with col2:
+                            run_analysis = st.button("Run AI Analysis")
 
+                        if (
+                            run_analysis
+                            or st.session_state.sentiment_results is not None
+                        ):
                             if (
                                 run_analysis
-                                or st.session_state.sentiment_results is not None
+                                or st.session_state.sentiment_results is None
                             ):
-                                if (
-                                    run_analysis
-                                    or st.session_state.sentiment_results is None
+                                with st.spinner(
+                                    "Analyzing comment sentiment using AI..."
                                 ):
-                                    with st.spinner(
-                                        "Analyzing comment sentiment using AI..."
-                                    ):
-                                        st.session_state.sentiment_results = (
-                                            batch_analyze_comments(
-                                                st.session_state.comments_df, llm_model
-                                            )
-                                        )
-
-                                    with st.spinner("Extracting key phrases..."):
-                                        st.session_state.phrases = extract_key_phrases(
+                                    st.session_state.sentiment_results = (
+                                        batch_analyze_comments(
                                             st.session_state.comments_df, llm_model
                                         )
-
-                                # Display sentiment metrics
-                                sentiment_counts = Counter(
-                                    [
-                                        r.get("sentiment", "neutral")
-                                        for r in st.session_state.sentiment_results
-                                    ]
-                                )
-                                pos_count = sentiment_counts.get("positive", 0)
-                                neu_count = sentiment_counts.get("neutral", 0)
-                                neg_count = sentiment_counts.get("negative", 0)
-
-                                scores = [
-                                    r.get("score", 0.0)
-                                    for r in st.session_state.sentiment_results
-                                ]
-                                avg_score = sum(scores) / len(scores) if scores else 0
-
-                                col1, col2, col3, col4 = st.columns(4)
-                                with col1:
-                                    st.metric("😊 Positive", pos_count)
-                                with col2:
-                                    st.metric("😐 Neutral", neu_count)
-                                with col3:
-                                    st.metric("😟 Negative", neg_count)
-                                with col4:
-                                    st.metric("Average Score", f"{avg_score:.2f}")
-
-                                # Create sentiment distribution visualization
-                                fig1 = px.pie(
-                                    values=[pos_count, neu_count, neg_count],
-                                    names=["Positive", "Neutral", "Negative"],
-                                    title="Sentiment Distribution",
-                                    color=["Positive", "Neutral", "Negative"],
-                                    color_discrete_map={
-                                        "Positive": "#4CAF50",
-                                        "Neutral": "#2196F3",
-                                        "Negative": "#F44336",
-                                    },
-                                )
-
-                                # Create sentiment score histogram
-                                sentiment_df = pd.DataFrame(
-                                    {
-                                        "score": scores,
-                                        "sentiment": [
-                                            r.get("sentiment", "neutral")
-                                            for r in st.session_state.sentiment_results
-                                        ],
-                                    }
-                                )
-
-                                fig2 = px.histogram(
-                                    sentiment_df,
-                                    x="score",
-                                    color="sentiment",
-                                    title="Sentiment Score Distribution",
-                                    color_discrete_map={
-                                        "positive": "#4CAF50",
-                                        "neutral": "#2196F3",
-                                        "negative": "#F44336",
-                                    },
-                                    nbins=20,
-                                )
-
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.plotly_chart(fig1, use_container_width=True)
-                                with col2:
-                                    st.plotly_chart(fig2, use_container_width=True)
-
-                                # Display phrase heatmap
-                                phrase_fig = create_phrase_heatmap(
-                                    st.session_state.phrases
-                                )
-                                if phrase_fig:
-                                    st.subheader("Key Phrases by Sentiment")
-                                    st.plotly_chart(
-                                        phrase_fig, use_container_width=True
                                     )
 
-                                # Display comments with sentiment
-                                st.subheader("Comments with AI Sentiment Analysis")
+                                with st.spinner("Extracting key phrases..."):
+                                    st.session_state.phrases = extract_key_phrases(
+                                        st.session_state.comments_df, llm_model
+                                    )
 
-                                # Create a dataframe with sentiment
-                                comments_with_sentiment = (
-                                    st.session_state.comments_df.copy()
-                                )
-                                comments_with_sentiment["sentiment"] = [
+                            # Display sentiment metrics
+                            sentiment_counts = Counter(
+                                [
                                     r.get("sentiment", "neutral")
                                     for r in st.session_state.sentiment_results
                                 ]
-                                comments_with_sentiment["sentiment_score"] = [
-                                    r.get("score", 0.0)
-                                    for r in st.session_state.sentiment_results
-                                ]
-                                comments_with_sentiment["explanation"] = [
-                                    r.get("explanation", "")
-                                    for r in st.session_state.sentiment_results
-                                ]
+                            )
+                            pos_count = sentiment_counts.get("positive", 0)
+                            neu_count = sentiment_counts.get("neutral", 0)
+                            neg_count = sentiment_counts.get("negative", 0)
 
-                                # Group by video
-                                for video in st.session_state.selected_videos:
-                                    video_id = video["id"]
-                                    title = video["title"]
-
-                                    video_comments = comments_with_sentiment[
-                                        comments_with_sentiment["video_id"] == video_id
-                                    ]
-
-                                    if not video_comments.empty:
-                                        with st.expander(
-                                            f"Sentiment Analysis for: {title}"
-                                        ):
-                                            # Show sentiment distribution for this video
-                                            video_sentiments = Counter(
-                                                video_comments["sentiment"]
-                                            )
-                                            video_fig = px.pie(
-                                                values=[
-                                                    video_sentiments.get("positive", 0),
-                                                    video_sentiments.get("neutral", 0),
-                                                    video_sentiments.get("negative", 0),
-                                                ],
-                                                names=[
-                                                    "Positive",
-                                                    "Neutral",
-                                                    "Negative",
-                                                ],
-                                                title=f"Sentiment Distribution for {title}",
-                                                color=[
-                                                    "Positive",
-                                                    "Neutral",
-                                                    "Negative",
-                                                ],
-                                                color_discrete_map={
-                                                    "Positive": "#4CAF50",
-                                                    "Neutral": "#2196F3",
-                                                    "Negative": "#F44336",
-                                                },
-                                            )
-                                            st.plotly_chart(
-                                                video_fig, use_container_width=True
-                                            )
-
-                                            # Display comments with sentiment
-                                            for i, comment in video_comments.iterrows():
-                                                sentiment_color = {
-                                                    "positive": "positive",
-                                                    "neutral": "neutral",
-                                                    "negative": "negative",
-                                                }.get(comment["sentiment"], "neutral")
-
-                                                st.markdown(
-                                                    f"""
-                                                **{comment["author"]}** ({comment["votes"]} votes) - {comment["time"]}
-                                                {comment["text"]}
-
-                                                <span class="{sentiment_color}">Sentiment: {comment["sentiment"].capitalize()} ({comment["sentiment_score"]:.2f})</span>
-                                                <small>{comment["explanation"]}</small>
-                                                """,
-                                                    unsafe_allow_html=True,
-                                                )
-                                                st.markdown("---")
-
-                    with tab4:
-                        # Engagement metrics analysis
-                        for video in st.session_state.selected_videos:
-                            video_id = video["id"]
-                            title = video["title"]
-
-                            video_comments = st.session_state.comments_df[
-                                st.session_state.comments_df["video_id"] == video_id
+                            scores = [
+                                r.get("score", 0.0)
+                                for r in st.session_state.sentiment_results
                             ]
+                            avg_score = sum(scores) / len(scores) if scores else 0
 
-                            if not video_comments.empty:
-                                with st.expander(f"Engagement Analysis for: {title}"):
-                                    # Convert votes column to numeric
-                                    video_comments["votes"] = pd.to_numeric(
-                                        video_comments["votes"].fillna(0),
-                                        errors="coerce",
-                                    )
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("😊 Positive", pos_count)
+                            with col2:
+                                st.metric("😐 Neutral", neu_count)
+                            with col3:
+                                st.metric("😟 Negative", neg_count)
+                            with col4:
+                                st.metric("Average Score", f"{avg_score:.2f}")
 
-                                    # Top 10 most upvoted comments
-                                    top_comments = video_comments.sort_values(
-                                        "votes", ascending=False
-                                    ).head(10)
-
-                                    st.subheader("Top 10 Most Upvoted Comments")
-                                    for _, comment in top_comments.iterrows():
-                                        st.markdown(
-                                            f"""
-                                        **{comment["author"]}** ({comment["votes"]} votes) - {comment["time"]}
-                                        {comment["text"]}
-                                        """
-                                        )
-                                        st.markdown("---")
-
-                                    # Comments over time (based on time_parsed)
-                                    if "time_parsed" in video_comments.columns:
-                                        video_comments["date"] = pd.to_datetime(
-                                            video_comments["time_parsed"], unit="s"
-                                        ).dt.date
-                                        comments_by_date = (
-                                            video_comments.groupby("date")
-                                            .size()
-                                            .reset_index(name="count")
-                                        )
-
-                                        fig = px.line(
-                                            comments_by_date,
-                                            x="date",
-                                            y="count",
-                                            title="Comments Over Time",
-                                            labels={
-                                                "date": "Date",
-                                                "count": "Number of Comments",
-                                            },
-                                        )
-                                        st.plotly_chart(fig, use_container_width=True)
-
-                    with tab5:
-                        # NEW: AI Summary & Insights
-                        if not openai_api_key:
-                            st.warning(
-                                "Please enter your OpenAI API key in the sidebar to enable AI summary and insights."
+                            # Create sentiment distribution visualization
+                            fig1 = px.pie(
+                                values=[pos_count, neu_count, neg_count],
+                                names=["Positive", "Neutral", "Negative"],
+                                title="Sentiment Distribution",
+                                color=["Positive", "Neutral", "Negative"],
+                                color_discrete_map={
+                                    "Positive": "#4CAF50",
+                                    "Neutral": "#2196F3",
+                                    "Negative": "#F44336",
+                                },
                             )
-                        elif st.session_state.sentiment_results is None:
-                            st.info(
-                                "Run the AI analysis in the 'AI Sentiment Analysis' tab first."
+
+                            # Create sentiment score histogram
+                            sentiment_df = pd.DataFrame(
+                                {
+                                    "score": scores,
+                                    "sentiment": [
+                                        r.get("sentiment", "neutral")
+                                        for r in st.session_state.sentiment_results
+                                    ],
+                                }
                             )
-                        else:
-                            # Generate summary if not already generated
-                            if st.session_state.summary is None:
-                                with st.spinner(
-                                    "Generating AI summary and insights..."
-                                ):
-                                    st.session_state.summary = generate_comment_summary(
-                                        st.session_state.comments_df,
-                                        st.session_state.sentiment_results,
-                                        st.session_state.phrases,
-                                        llm_model,
-                                    )
 
-                            # Display summary
-                            st.subheader("AI-Generated Summary")
-                            st.markdown(st.session_state.summary)
+                            fig2 = px.histogram(
+                                sentiment_df,
+                                x="score",
+                                color="sentiment",
+                                title="Sentiment Score Distribution",
+                                color_discrete_map={
+                                    "positive": "#4CAF50",
+                                    "neutral": "#2196F3",
+                                    "negative": "#F44336",
+                                },
+                                nbins=20,
+                            )
 
-                            # Display key topics
-                            st.subheader("Key Topics")
-                            key_topics = st.session_state.phrases.get("key_topics", [])
-                            if key_topics:
-                                cols = st.columns(min(5, len(key_topics)))
-                                for i, topic in enumerate(key_topics):
-                                    with cols[i % len(cols)]:
-                                        st.markdown(f"🔑 **{topic}**")
-
-                            # Display common positive and negative phrases
                             col1, col2 = st.columns(2)
                             with col1:
-                                st.subheader("Common Positive Phrases")
-                                positive_phrases = st.session_state.phrases.get(
-                                    "positive_phrases", []
-                                )
-                                if positive_phrases:
-                                    for phrase in positive_phrases:
-                                        st.markdown(f"✅ {phrase}")
+                                st.plotly_chart(fig1, use_container_width=True)
                             with col2:
-                                st.subheader("Common Negative Phrases")
-                                negative_phrases = st.session_state.phrases.get(
-                                    "negative_phrases", []
-                                )
-                                if negative_phrases:
-                                    for phrase in negative_phrases:
-                                        st.markdown(f"❌ {phrase}")
+                                st.plotly_chart(fig2, use_container_width=True)
 
-                    # Download options for the dataframe
-                    st.subheader("Download Data")
-                    col1, col2 = st.columns(2)
-                    with col1:
+                            # Display phrase heatmap
+                            phrase_fig = create_phrase_heatmap(st.session_state.phrases)
+                            if phrase_fig:
+                                st.subheader("Key Phrases by Sentiment")
+                                st.plotly_chart(phrase_fig, use_container_width=True)
+
+                            # Display comments with sentiment
+                            st.subheader("Comments with AI Sentiment Analysis")
+
+                            # Create a dataframe with sentiment
+                            comments_with_sentiment = (
+                                st.session_state.comments_df.copy()
+                            )
+                            comments_with_sentiment["sentiment"] = [
+                                r.get("sentiment", "neutral")
+                                for r in st.session_state.sentiment_results
+                            ]
+                            comments_with_sentiment["sentiment_score"] = [
+                                r.get("score", 0.0)
+                                for r in st.session_state.sentiment_results
+                            ]
+                            comments_with_sentiment["explanation"] = [
+                                r.get("explanation", "")
+                                for r in st.session_state.sentiment_results
+                            ]
+
+                            # Group by video
+                            for video in st.session_state.selected_videos:
+                                video_id = video["id"]
+                                title = video["title"]
+
+                                video_comments = comments_with_sentiment[
+                                    comments_with_sentiment["video_id"] == video_id
+                                ]
+
+                                if not video_comments.empty:
+                                    with st.expander(
+                                        f"Sentiment Analysis for: {title}"
+                                    ):
+                                        # Show sentiment distribution for this video
+                                        video_sentiments = Counter(
+                                            video_comments["sentiment"]
+                                        )
+                                        video_fig = px.pie(
+                                            values=[
+                                                video_sentiments.get("positive", 0),
+                                                video_sentiments.get("neutral", 0),
+                                                video_sentiments.get("negative", 0),
+                                            ],
+                                            names=[
+                                                "Positive",
+                                                "Neutral",
+                                                "Negative",
+                                            ],
+                                            title=f"Sentiment Distribution for {title}",
+                                            color=[
+                                                "Positive",
+                                                "Neutral",
+                                                "Negative",
+                                            ],
+                                            color_discrete_map={
+                                                "Positive": "#4CAF50",
+                                                "Neutral": "#2196F3",
+                                                "Negative": "#F44336",
+                                            },
+                                        )
+                                        st.plotly_chart(
+                                            video_fig, use_container_width=True
+                                        )
+
+                                        # Display comments with sentiment
+                                        for i, comment in video_comments.iterrows():
+                                            sentiment_color = {
+                                                "positive": "positive",
+                                                "neutral": "neutral",
+                                                "negative": "negative",
+                                            }.get(comment["sentiment"], "neutral")
+
+                                            st.markdown(
+                                                f"""
+                                            **{comment["author"]}** ({comment["votes"]} votes) - {comment["time"]}
+                                            {comment["text"]}
+
+                                            <span class="{sentiment_color}">Sentiment: {comment["sentiment"].capitalize()} ({comment["sentiment_score"]:.2f})</span>
+                                            <small>{comment["explanation"]}</small>
+                                            """,
+                                                unsafe_allow_html=True,
+                                            )
+                                            st.markdown("---")
+
+                with tab4:
+                    # Engagement metrics analysis
+                    for video in st.session_state.selected_videos:
+                        video_id = video["id"]
+                        title = video["title"]
+
+                        video_comments = st.session_state.comments_df[
+                            st.session_state.comments_df["video_id"] == video_id
+                        ]
+
+                        if not video_comments.empty:
+                            with st.expander(f"Engagement Analysis for: {title}"):
+                                # Convert votes column to numeric
+                                video_comments["votes"] = pd.to_numeric(
+                                    video_comments["votes"].fillna(0),
+                                    errors="coerce",
+                                )
+
+                                # Top 10 most upvoted comments
+                                top_comments = video_comments.sort_values(
+                                    "votes", ascending=False
+                                ).head(10)
+
+                                st.subheader("Top 10 Most Upvoted Comments")
+                                for _, comment in top_comments.iterrows():
+                                    st.markdown(
+                                        f"""
+                                    **{comment["author"]}** ({comment["votes"]} votes) - {comment["time"]}
+                                    {comment["text"]}
+                                    """
+                                    )
+                                    st.markdown("---")
+
+                                # Comments over time (based on time_parsed)
+                                if "time_parsed" in video_comments.columns:
+                                    video_comments["date"] = pd.to_datetime(
+                                        video_comments["time_parsed"], unit="s"
+                                    ).dt.date
+                                    comments_by_date = (
+                                        video_comments.groupby("date")
+                                        .size()
+                                        .reset_index(name="count")
+                                    )
+
+                                    fig = px.line(
+                                        comments_by_date,
+                                        x="date",
+                                        y="count",
+                                        title="Comments Over Time",
+                                        labels={
+                                            "date": "Date",
+                                            "count": "Number of Comments",
+                                        },
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+
+                with tab5:
+                    # NEW: AI Summary & Insights
+                    if not openai_api_key:
+                        st.warning(
+                            "Please enter your OpenAI API key in the sidebar to enable AI summary and insights."
+                        )
+                    elif st.session_state.sentiment_results is None:
+                        st.info(
+                            "Run the AI analysis in the 'AI Sentiment Analysis' tab first."
+                        )
+                    else:
+                        # Generate summary if not already generated
+                        if st.session_state.summary is None:
+                            with st.spinner("Generating AI summary and insights..."):
+                                st.session_state.summary = generate_comment_summary(
+                                    st.session_state.comments_df,
+                                    st.session_state.sentiment_results,
+                                    st.session_state.phrases,
+                                    llm_model,
+                                )
+
+                        # Display summary
+                        st.subheader("AI-Generated Summary")
+                        st.markdown(st.session_state.summary)
+
+                        # Display key topics
+                        st.subheader("Key Topics")
+                        key_topics = st.session_state.phrases.get("key_topics", [])
+                        if key_topics:
+                            cols = st.columns(min(5, len(key_topics)))
+                            for i, topic in enumerate(key_topics):
+                                with cols[i % len(cols)]:
+                                    st.markdown(f"🔑 **{topic}**")
+
+                        # Display common positive and negative phrases
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader("Common Positive Phrases")
+                            positive_phrases = st.session_state.phrases.get(
+                                "positive_phrases", []
+                            )
+                            if positive_phrases:
+                                for phrase in positive_phrases:
+                                    st.markdown(f"✅ {phrase}")
+                        with col2:
+                            st.subheader("Common Negative Phrases")
+                            negative_phrases = st.session_state.phrases.get(
+                                "negative_phrases", []
+                            )
+                            if negative_phrases:
+                                for phrase in negative_phrases:
+                                    st.markdown(f"❌ {phrase}")
+
+                # Download options for the dataframe
+                st.subheader("Download Data")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(
+                        get_download_link(
+                            st.session_state.comments_df, "youtube_comments.csv"
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+                # If sentiment analysis has been run, offer to download that too
+                if st.session_state.sentiment_results is not None:
+                    with col2:
+                        sentiment_df = st.session_state.comments_df.copy()
+                        sentiment_df["sentiment"] = [
+                            r.get("sentiment", "neutral")
+                            for r in st.session_state.sentiment_results
+                        ]
+                        sentiment_df["sentiment_score"] = [
+                            r.get("score", 0.0)
+                            for r in st.session_state.sentiment_results
+                        ]
+
                         st.markdown(
                             get_download_link(
-                                st.session_state.comments_df, "youtube_comments.csv"
+                                sentiment_df, "youtube_comments_with_sentiment.csv"
                             ),
                             unsafe_allow_html=True,
                         )
 
-                    # If sentiment analysis has been run, offer to download that too
-                    if st.session_state.sentiment_results is not None:
-                        with col2:
-                            sentiment_df = st.session_state.comments_df.copy()
-                            sentiment_df["sentiment"] = [
-                                r.get("sentiment", "neutral")
-                                for r in st.session_state.sentiment_results
-                            ]
-                            sentiment_df["sentiment_score"] = [
-                                r.get("score", 0.0)
-                                for r in st.session_state.sentiment_results
-                            ]
-
-                            st.markdown(
-                                get_download_link(
-                                    sentiment_df, "youtube_comments_with_sentiment.csv"
-                                ),
-                                unsafe_allow_html=True,
-                            )
-
-        else:
-            # Show instructions when no search has been performed
-            st.info(
-                "Enter a search keyword in the sidebar and click 'Search YouTube' to begin."
-            )
+    else:
+        # Show instructions when no search has been performed
+        st.info(
+            "Enter a search keyword in the sidebar and click 'Search YouTube' to begin."
+        )
 
 
 if __name__ == "__main__":
