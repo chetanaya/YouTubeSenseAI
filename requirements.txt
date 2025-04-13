@@ -7,3 +7,10 @@ wordcloud
 matplotlib
 youtube-search
 youtube-comment-downloader
+youtube-transcript-api
+langchain
+langchain-community
+langchain-openai
+openai
+langgraph
+faiss-cpu
