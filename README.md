@@ -4,7 +4,7 @@ YouTubeSenseAI is a Streamlit dashboard designed to analyze YouTube videos. It a
 
 ## Features
 
-The application is divided into two main sections accessible via the sidebar navigation:
+The application is divided into three main sections accessible via the sidebar navigation:
 
 ### 1. YouTube Comment Analysis
 
@@ -14,7 +14,7 @@ The application is divided into two main sections accessible via the sidebar nav
 *   **Comment Display:** View comments grouped by video.
 *   **Word Clouds:** Generate word clouds from comments for each video to visualize frequent terms.
 *   **AI Sentiment Analysis:**
-    *   Analyze the sentiment (positive, negative, neutral) and score of individual comments using an LLM (e.g., GPT-4o Mini).
+    *   Analyze the sentiment (positive, negative, neutral) and score of individual comments using an LLM (default: `gpt-4o-mini`).
     *   Visualize overall sentiment distribution (pie chart) and score distribution (histogram).
     *   Identify and display key positive and negative phrases using AI.
     *   Visualize key phrases with a heatmap.
@@ -26,11 +26,31 @@ The application is divided into two main sections accessible via the sidebar nav
     *   Display extracted key topics and common positive/negative phrases.
 *   **Data Download:** Download fetched comments and sentiment analysis results as CSV files.
 
-### 2. Transcript Analysis (Whisper Edition)
+### 2. Transcript Analysis (Standard YouTube API)
+
+*   **URL Input:** Analyze a specific video by pasting its YouTube URL.
+*   **Transcript Fetching:**
+    *   Retrieve transcripts using the `youtube-transcript-api`.
+    *   Supports multiple languages with automatic fallback if the preferred language isn't found.
+*   **Transcript Display:**
+    *   Show the full transcript text with **clickable timestamps** to navigate the video.
+*   **AI Summarization:**
+    *   Generate a comprehensive summary of the transcript using an LLM (supports OpenAI models and local Ollama models like `deepseek-r1`).
+    *   Option to provide a custom summarization prompt.
+*   **AI Q&A Generation:** Automatically generate potential questions and answers based on the transcript content.
+*   **Translation:** Translate the transcript or the summary into various languages using an LLM.
+*   **Interactive Q&A (RAG):**
+    *   Ask questions about the video content in a chat interface.
+    *   Uses a Retrieval-Augmented Generation (RAG) system (built with LangChain and LangGraph) to answer questions based on the transcript content.
+    *   Supports multiple LLMs (OpenAI/Ollama).
+    *   Maintains chat history per video session.
+*   **Download:** Download the raw transcript text and the generated summary.
+
+### 3. Transcript Analysis (Whisper Edition)
 
 *   **URL Input:** Analyze a specific video by pasting its YouTube URL.
 *   **Transcript Fetching (Whisper):**
-    *   Downloads the audio from the YouTube video.
+    *   Downloads the audio from the YouTube video using `yt-dlp`.
     *   Uses **OpenAI Whisper** to transcribe the audio, providing a potentially more accurate transcript than standard YouTube captions.
     *   Requires `ffmpeg` to be installed on the system for audio processing.
 *   **Transcript Display:**
@@ -57,7 +77,7 @@ The application is divided into two main sections accessible via the sidebar nav
     ```bash
     python -m venv venv
     # On Windows
-    venv\Scripts\activate
+    venv\\Scripts\\activate
     # On macOS/Linux
     source venv/bin/activate
     ```
@@ -65,14 +85,14 @@ The application is divided into two main sections accessible via the sidebar nav
     ```bash
     pip install -r requirements.txt
     ```
-    **Note:** This application requires `ffmpeg` to be installed and accessible in your system's PATH for the Whisper transcript analysis feature.
+    **Note:** The **Whisper Transcript Analysis** feature requires `ffmpeg` to be installed and accessible in your system's PATH for audio processing.
     *   **macOS (using Homebrew):** `brew install ffmpeg`
     *   **Debian/Ubuntu:** `sudo apt update && sudo apt install ffmpeg`
-    *   **Windows:** Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to your system's PATH.
+    *   **Windows:** Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add the `bin` directory to your system's PATH.
 4.  **Set up API Keys:**
-    *   Copy the `.env.example` file to `.env` in the project root directory.
+    *   Copy the `.env.example` file (if it exists) or create a new file named `.env` in the project root directory.
     *   Add your OpenAI API key to the `.env` file:
-        ```
+        ```dotenv
         OPENAI_API_KEY=your_openai_api_key_here
         ```
     *   Alternatively, you can enter the API key directly in the application's sidebar when prompted.
@@ -85,7 +105,7 @@ Run the Streamlit application from your terminal:
 streamlit run app.py
 ```
 
-Navigate through the sidebar to switch between the "YouTube Comment Analysis" and "Transcript Analysis" dashboards. Follow the on-screen instructions to search for videos, fetch data, and perform analyses.
+Navigate through the sidebar to switch between the "YouTube Comment Analysis", "Transcript Analysis", and "Transcript Analysis (Whisper)" dashboards. Follow the on-screen instructions to search for videos, fetch data, and perform analyses.
 
 ## Configuration
 
@@ -101,14 +121,23 @@ Basic settings can be adjusted in the `config.yaml` file:
 
 The application uses several key libraries:
 
-*   `streamlit`: For building the web application interface.
+*   `streamlit`, `streamlit-scroll-to-top`: For building the web application interface and UI enhancements.
 *   `pandas`, `numpy`: For data manipulation.
 *   `plotly`, `matplotlib`, `wordcloud`: For data visualization.
-*   `youtube-search`, `youtube-comment-downloader`: For interacting with YouTube data (comments).
-*   `langchain`, `langchain-community`, `langchain-openai`, `openai`: For Large Language Model integration (summarization, sentiment analysis, Q&A, Whisper transcription).
-*   `langgraph`: For building the RAG agent.
+*   `youtube-search`: For searching YouTube videos.
+*   `youtube-comment-downloader`: For fetching YouTube comments.
+*   `youtube-transcript-api`: For fetching standard YouTube transcripts.
+*   `langchain`, `langchain-community`, `langchain-openai`, `langchain-ollama`, `openai`, `ollama`: For Large Language Model integration (summarization, sentiment analysis, Q&A, Whisper transcription, local LLM support).
+*   `langgraph`: For building the RAG agent state machine.
 *   `faiss-cpu`: For vector storage in the RAG system.
-*   `pytube` (indirectly via `YoutubeAudioLoader`): For downloading YouTube audio.
-*   `ffmpeg-python` (or system `ffmpeg`): Required by Whisper for audio processing.
+*   `yt-dlp`, `pydub`, `librosa`: For downloading and processing YouTube audio (used by Whisper). (`pytube` is an indirect dependency).
+*   `ffmpeg` (System dependency): Required by Whisper for audio processing.
 *   `pyyaml`: For loading configuration.
 *   `python-dotenv`: For managing environment variables (API keys).
+
+## Future Enhancements
+
+1.  Enhancing video-based RAG beyond just transcripts (e.g., analyzing visual elements).
+2.  Extracting key information directly from video content (visuals, audio cues).
+3.  Expanding sentiment analysis to include transcript and audio emotion recognition, complementing the existing comment analysis.
+4.  Implementing speaker diarization for transcripts to differentiate between speakers.
