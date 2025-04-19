@@ -1,20 +1,22 @@
 import streamlit as st
-import re
 import os
 import time
+import re
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
-from typing import List
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from utils.transcript_utils import (
+    extract_video_id,
+    summarize_transcript,
+    translate_text,
+    create_rag_system,
+)
+from langchain_ollama import ChatOllama
+from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
-from langgraph.graph import END, StateGraph
-from langgraph.checkpoint.memory import MemorySaver
 from modules.nav import Navbar
+from streamlit_scroll_to_top import scroll_to_here
 
 # Load environment variables
 load_dotenv()
@@ -29,23 +31,15 @@ st.set_page_config(
 
 Navbar()
 
+# Step 1: Initialize scroll state in session_state
+if "scroll_to_top" not in st.session_state:
+    st.session_state.scroll_to_top = False
 
-def extract_video_id(url):
-    """Extract YouTube video ID from various URL formats"""
-    patterns = [
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^\?\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^\?\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^\?\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/shorts\/([^\?\s]+)",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-
-    return None
+if st.session_state.scroll_to_top:
+    scroll_to_here(
+        0, key="top"
+    )  # Scroll to the top of the page, 0 means instantly, but you can add a delay (im milliseconds)
+    st.session_state.scroll_to_top = False  # Reset the state after scrolling
 
 
 def extract_available_languages(error_message):
@@ -121,13 +115,15 @@ def transcript_to_text(transcript):
     return full_text.strip()
 
 
-def format_transcript_with_timestamps(transcript):
+def format_transcript_with_timestamps(transcript, video_id):
     """Format transcript with timestamps for better readability and add clickable links"""
     if not transcript:
         return ""
 
     formatted_text = ""
-    for entry in transcript:
+    timestamp_links = []
+
+    for i, entry in enumerate(transcript):
         start_time = entry.get("start", 0)
         minutes = int(start_time // 60)
         seconds = int(start_time % 60)
@@ -135,240 +131,33 @@ def format_transcript_with_timestamps(transcript):
         text = entry.get("text", "").strip()
         formatted_text += f"{timestamp} {text}\n\n"
 
-    return formatted_text
+        # Store timestamp info for creating links
+        timestamp_links.append({"id": i, "text": timestamp, "seconds": int(start_time)})
+
+    return {"text": formatted_text, "links": timestamp_links}
 
 
-def summarize_transcript(transcript_text, llm_model="gpt-4o-mini", custom_prompt=None):
-    """Generate a summary and potential Q&A pairs of the transcript using LLM"""
-    if not transcript_text or len(transcript_text) < 50:
-        return {"summary": "Transcript is too short to summarize.", "qa_pairs": ""}
-
-    llm = ChatOpenAI(temperature=0, model=llm_model)
-    output_parser = StrOutputParser()
-
-    max_length = 15000
-    if len(transcript_text) > max_length:
-        transcript_text = transcript_text[:max_length] + "..."
-
-    # --- Summary Generation ---
-    summary_prompt_template = (
-        custom_prompt
-        if custom_prompt
-        else """
-    Analyze the following YouTube video transcript and generate a comprehensive yet concise summary.
-
-    Transcript: {transcript}
-
-    **Comprehensive Summary Generation Process:**
-
-    1.  **Core Topic & Purpose:** Identify the main subject and the video's primary goal (e.g., inform, teach, persuade, review, entertain).
-    2.  **Context & Audience:** Determine the setting (interview, lecture, tutorial, vlog) and intended audience, if discernible.
-    3.  **Key Figures:** Note any important speakers, interviewees, or mentioned individuals.
-    4.  **Structure & Flow:** Understand how the video is organized (e.g., introduction, key sections, conclusion; chronological order; problem/solution).
-    5.  **Main Points & Arguments:** Extract the key messages, central arguments, steps demonstrated, or significant events discussed.
-    6.  **Supporting Details & Keywords:** Include crucial data, evidence, examples, or specific terminology/keywords central to the topic.
-    7.  **Actions, Recommendations & Solutions:** Capture any calls to action, solutions proposed, tips, or specific advice given.
-    8.  **Broader Themes & Implications:** Recognize underlying themes, the video's relevance or timeliness, and any future predictions or outlooks mentioned.
-    9.  **Key Visuals/Audio (If Inferrable):** Briefly note if the transcript implies reliance on essential visuals (graphs, demonstrations) or specific audio cues, if central to understanding.
-
-    **Formatting and Style Guidelines:**
-
-    *   **Objectivity:** Report neutrally what the transcript says. Attribute claims or opinions to the video's speakers (e.g., "The speaker argues...").
-    *   **Conciseness:** Focus on the most valuable information for someone who hasn't seen the video. Omit fluff, excessive detail, and repetitive points.
-    *   **Clarity:** Use clear headings/subheadings (Markdown). Employ bullet points for lists (key takeaways, steps). Use brief paragraphs for context.
-    *   **Emphasis:** **Bold** critical terms, conclusions, or key takeaways.
-
-    **Generated Summary:**
-    """
-    )
-    summary_prompt = ChatPromptTemplate.from_template(summary_prompt_template)
-    summary_chain = summary_prompt | llm | output_parser
-
-    # --- Q&A Generation ---
-    qa_prompt_template = """
-    Based *only* on the provided YouTube video transcript, generate 3-5 insightful questions that a viewer might have after watching. For each question, provide a concise answer derived *directly* from the transcript content. Do not add information not present in the transcript.
-
-    Transcript: {transcript}
-
-    Format the Q&A pairs clearly:
-    **Q1:** [Question 1]?
-    **A1:** [Answer 1 derived from transcript].
-
-    **Q2:** [Question 2]?
-    **A2:** [Answer 2 derived from transcript].
-    ...
-
-    **Generated Q&A Pairs:**
-    """
-    qa_prompt = ChatPromptTemplate.from_template(qa_prompt_template)
-    qa_chain = qa_prompt | llm | output_parser
-
-    summary_result = "Error generating summary."
-    qa_result = "Error generating Q&A."
-
-    try:
-        # Invoke summary chain
-        summary_result = summary_chain.invoke({"transcript": transcript_text})
-    except Exception as e:
-        st.error(f"Error generating summary: {str(e)}")
-        summary_result = "Unable to generate summary due to an error."
-
-    try:
-        # Invoke Q&A chain
-        qa_result = qa_chain.invoke({"transcript": transcript_text})
-    except Exception as e:
-        st.error(f"Error generating Q&A: {str(e)}")
-        qa_result = "Unable to generate Q&A pairs due to an error."
-
-    return {"summary": summary_result.strip(), "qa_pairs": qa_result.strip()}
+def get_llm(model_name, temperature=0):
+    """Initialize the appropriate LLM based on model selection"""
+    if model_name == "deepseek-r1-ollama":
+        return ChatOllama(model="deepseek-r1:latest", temperature=temperature)
+    else:
+        return ChatOpenAI(temperature=temperature, model=model_name)
 
 
-def translate_text(text, target_language, llm_model="gpt-4o-mini"):
-    """Translate text to the target language using LLM"""
-    if not text:
-        return "No text to translate."
-
-    llm = ChatOpenAI(temperature=0, model=llm_model)
-
-    max_length = 15000
-    if len(text) > max_length:
-        text = text[:max_length] + "..."
-
-    prompt = ChatPromptTemplate.from_template(
-        """Translate the following text to {language}. Maintain the formatting and structure as much as possible:
-
-        {text}
-
-        Translation:
-        """
-    )
-
-    chain = prompt | llm
-
-    try:
-        response = chain.invoke({"language": target_language, "text": text})
-        return response.content
-    except Exception as e:
-        st.error(f"Error translating text: {str(e)}")
-        return "Unable to translate text due to an error."
-
-
-def create_rag_system(transcript_text: str, llm_model: str = "gpt-4o-mini"):
-    """Create a RAG system with chat history for transcript Q&A"""
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    chunks = text_splitter.split_text(transcript_text)
-
-    embeddings = OpenAIEmbeddings()
-    vectorstore = FAISS.from_texts(chunks, embeddings)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-
-    llm = ChatOpenAI(temperature=0, model=llm_model)
-
-    def retrieve(state):
-        query = (
-            state["messages"][-1].content
-            if isinstance(state["messages"][-1], HumanMessage)
-            else ""
-        )
-        docs = retriever.invoke(query)
-        context = "\n\n".join([doc.page_content for doc in docs])
-        return {"context": context}
-
-    def generate_answer(state):
-        context = state.get("context", "")
-        human_message = next(
-            (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-            None,
-        )
-        if not human_message:
-            return {
-                "messages": state["messages"]
-                + [
-                    AIMessage(
-                        content="I couldn't understand your question. Please try again."
-                    )
-                ]
-            }
-
-        messages = [
-            AIMessage(
-                content="I am an AI assistant that helps answer questions about the YouTube video transcript."
-            ),
-            HumanMessage(
-                content=f"""First, analyze the provided context from the video transcript and identify 2-3 key potential questions and their answers that could be derived from this specific context.
-
-            Context:
-            {context}
-
-            Potential Q&A based on context:
-            1. Q: ... A: ...
-            2. Q: ... A: ...
-            3. Q: ... A: ...
-
-            Now, answer the user's question based *only* on the provided context. If the context doesn't contain the answer, state that clearly. Do not make up information.
-
-            User's Question: {human_message.content}
-
-            Final Answer:"""
-            ),
-        ]
-
-        answer = llm.invoke(messages).content
-        return {"messages": state["messages"] + [AIMessage(content=answer)]}
-
-    from typing import TypedDict
-
-    class GraphState(TypedDict):
-        messages: List
-        context: str
-
-    workflow = StateGraph(state_schema=GraphState)
-
-    workflow.add_node("retrieve", retrieve)
-    workflow.add_node("generate_answer", generate_answer)
-
-    workflow.set_entry_point("retrieve")
-    workflow.add_edge("retrieve", "generate_answer")
-    workflow.add_edge("generate_answer", END)
-
-    rag_chain = workflow.compile(checkpointer=MemorySaver())
-
-    def invoke_rag_chain(messages, thread_id: str):
-        config = {"configurable": {"thread_id": thread_id}}
-        initial_state = {"messages": messages, "context": ""}
-        result = rag_chain.invoke(initial_state, config=config)
-        return (
-            result["messages"][-1]
-            if result["messages"]
-            else AIMessage(content="No response generated.")
-        )
-
-    return invoke_rag_chain
+def get_embeddings(model_name):
+    """Initialize the appropriate embeddings model based on selection"""
+    if model_name == "deepseek-r1-ollama":
+        return OllamaEmbeddings(model="deepseek-r1:latest")
+    else:
+        return OpenAIEmbeddings()
 
 
 def app():
     st.title("📝 YouTube Transcript Analysis")
 
     st.markdown(
-        """
-        <style>
-        .big-font {
-            font-size:20px !important;
-            font-weight: bold;
-        }
-        .container {
-            background-color: #f0f2f6;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .summary-container {
-            background-color: #e6f3ff;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            border-left: 5px solid #2196F3;
-        }
+        """<style>
         .transcript-container {
             max-height: 400px;
             overflow-y: auto;
@@ -379,55 +168,7 @@ def app():
             font-family: monospace;
             white-space: pre-wrap;
         }
-        .timestamp {
-            color: #2196F3;
-            font-weight: bold;
-            margin-right: 8px;
-            cursor: pointer;
-            text-decoration: none;
-        }
-        .timestamp:hover {
-            text-decoration: underline;
-        }
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 24px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            height: 50px;
-            white-space: pre-wrap;
-            background-color: white;
-            border-radius: 4px 4px 0px 0px;
-            gap: 1px;
-            padding: 10px 16px;
-            font-weight: 600;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: #e6f3ff !important;
-            border-bottom: 2px solid #2196F3 !important;
-        }
-        </style>
-        <script>
-        function seekToTimestamp(seconds) {
-            const videoContainer = document.querySelector('iframe').parentNode;
-            const videoId = new URLSearchParams(document.querySelector('iframe').src.split('?')[1]).get('v') ||
-                           document.querySelector('iframe').src.split('/').pop().split('?')[0];
-
-            if (videoContainer && videoId) {
-                const newIframe = document.createElement('iframe');
-                newIframe.width = "100%";
-                newIframe.height = "315";
-                newIframe.src = `https://www.youtube.com/embed/${videoId}?start=${seconds}&autoplay=1`;
-                newIframe.title = "YouTube video player";
-                newIframe.frameBorder = "0";
-                newIframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
-                newIframe.allowFullscreen = true;
-
-                const oldIframe = document.querySelector('iframe');
-                videoContainer.replaceChild(newIframe, oldIframe);
-            }
-        }
-        </script>
-        """,
+        </style>""",
         unsafe_allow_html=True,
     )
 
@@ -441,8 +182,33 @@ def app():
 
         st.header("LLM Model Settings")
         llm_model = st.selectbox(
-            "LLM Model", ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4", "gpt-4o"], index=0
+            "LLM Model",
+            ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4", "gpt-4o", "deepseek-r1-ollama"],
+            index=0,
         )
+
+        temperature = st.slider(
+            "Temperature", min_value=0.0, max_value=1.0, value=0.0, step=0.1
+        )
+        if llm_model == "deepseek-r1-ollama":
+            st.info(
+                "Using local Ollama with deepseek-r1:latest model. Make sure Ollama is running with this model installed."
+            )
+            if st.button("Check Ollama Status"):
+                try:
+                    test_llm = ChatOllama(model="deepseek-r1:latest")
+                    test_msg = test_llm.invoke("Hi")
+                    st.success(
+                        f"Ollama is running correctly! Response: {test_msg.content[:50]}..."
+                    )
+                except Exception as e:
+                    st.error(f"Error connecting to Ollama: {str(e)}")
+                    st.markdown("""
+                    ### Troubleshooting:
+                    1. Make sure Ollama is installed and running
+                    2. Install the model with: `ollama pull deepseek-r1:latest`
+                    3. Check Ollama server status
+                    """)
 
         st.header("Language Settings")
         transcript_language = st.selectbox(
@@ -480,15 +246,12 @@ def app():
 
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.markdown(
-            '<p class="big-font">Enter YouTube Video URL</p>', unsafe_allow_html=True
-        )
+        st.subheader("Enter YouTube Video URL")
         video_url = st.text_input(
             "Paste the YouTube video URL here",
             placeholder="https://www.youtube.com/watch?v=...",
         )
     with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
     if video_url:
@@ -497,10 +260,26 @@ def app():
         if not video_id:
             st.error("Invalid YouTube URL. Please enter a valid YouTube video URL.")
         else:
-            st.markdown(
-                f'<iframe width="100%" height="500" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>',
-                unsafe_allow_html=True,
-            )
+            # Create a container for the video
+            video_container = st.empty()
+
+            # Store the current video timestamp in the session state
+            if "current_timestamp" not in st.session_state:
+                st.session_state.current_timestamp = 0
+
+            if st.session_state.current_timestamp == 0:
+                # Display the video with the timestamp
+                video_container.video(
+                    f"https://www.youtube.com/watch?v={video_id}",
+                    autoplay=False,
+                )
+            else:
+                # Display the video with the timestamp
+                video_container.video(
+                    f"https://www.youtube.com/watch?v={video_id}",
+                    start_time=st.session_state.current_timestamp,
+                    autoplay=True,
+                )
 
             with st.expander("Advanced Summarization Options", expanded=False):
                 custom_prompt = st.text_area(
@@ -533,6 +312,8 @@ def app():
                 st.session_state.chat_histories = {}
             if "rag_chains" not in st.session_state:
                 st.session_state.rag_chains = {}
+            if "timestamp_links" not in st.session_state:
+                st.session_state.timestamp_links = []
 
             if fetch_btn:
                 if st.session_state.current_video_id != video_id:
@@ -554,20 +335,26 @@ def app():
                         st.session_state.transcript_text = transcript_to_text(
                             transcript
                         )
-                        st.session_state.formatted_transcript = (
-                            format_transcript_with_timestamps(transcript)
+
+                        # Get formatted transcript with timestamp links
+                        transcript_data = format_transcript_with_timestamps(
+                            transcript, video_id
                         )
+                        st.session_state.formatted_transcript = transcript_data["text"]
+                        st.session_state.timestamp_links = transcript_data["links"]
+
                         st.write(
                             f"Transcript fetched successfully in language code: {used_language}!"
                         )
 
                         st.session_state.language_used = used_language
 
-                        time.sleep(0.5)
-
                         st.write("Generating summary and Q&A insights...")
                         analysis_result = summarize_transcript(
-                            st.session_state.transcript_text, llm_model, custom_prompt
+                            st.session_state.transcript_text,
+                            llm_model,
+                            custom_prompt,
+                            temperature,
                         )
                         st.session_state.summary = analysis_result.get(
                             "summary", "Summary generation failed."
@@ -578,11 +365,8 @@ def app():
 
                         st.write("Setting up question answering system...")
                         st.session_state.rag_chains[video_id] = create_rag_system(
-                            st.session_state.transcript_text, llm_model
+                            st.session_state.transcript_text, llm_model, temperature
                         )
-
-                        if video_id not in st.session_state.chat_histories:
-                            st.session_state.chat_histories[video_id] = []
 
                         status.update(
                             label="✅ Analysis complete!",
@@ -612,6 +396,7 @@ def app():
                 )
 
                 with tabs[0]:
+                    st.subheader("📊 Summary")
                     if st.session_state.summary:
                         if (
                             hasattr(st.session_state, "language_used")
@@ -620,14 +405,9 @@ def app():
                             st.info(
                                 f"⚠️ Note: The transcript was auto-detected in language code: {st.session_state.language_used}"
                             )
-
-                        with st.container():
-                            summary_container = st.expander(
-                                "Full Summary", expanded=True
-                            )
-                            with summary_container:
-                                st.markdown(st.session_state.summary)
-
+                        summary_container = st.expander("Full Summary", expanded=True)
+                        with summary_container:
+                            st.markdown(st.session_state.summary)
                         st.download_button(
                             label="📥 Download Summary",
                             data=st.session_state.summary,
@@ -655,17 +435,54 @@ def app():
 
                 with tabs[2]:
                     with st.container():
-                        transcript_container = st.expander(
-                            "Full Transcript", expanded=True
-                        )
-                        with transcript_container:
+                        st.subheader("Transcript with Timestamps")
+
+                        # Display transcript text first
+                        if st.session_state.formatted_transcript:
                             st.text_area(
                                 label="Full Transcript Text",
                                 value=st.session_state.formatted_transcript,
-                                height=400,
+                                height=300,
                                 disabled=True,
                                 label_visibility="collapsed",
                             )
+
+                        st.subheader("Jump to Timestamp")
+                        st.info(
+                            "Click on a timestamp to navigate to that point in the video"
+                        )
+
+                        # Create columns for timestamp links
+                        cols_per_row = 6
+                        if (
+                            hasattr(st.session_state, "timestamp_links")
+                            and st.session_state.timestamp_links
+                        ):
+                            # Group timestamp links into chunks to display them in columns
+                            timestamp_links = st.session_state.timestamp_links
+
+                            # Create chunks of timestamps
+                            chunks = [
+                                timestamp_links[i : i + cols_per_row]
+                                for i in range(0, len(timestamp_links), cols_per_row)
+                            ]
+
+                            for chunk in chunks:
+                                cols = st.columns(cols_per_row)
+                                for i, link in enumerate(chunk):
+                                    with cols[i]:
+                                        if st.button(
+                                            f"{link['text']}",
+                                            key=f"ts_{link['id']}",
+                                            use_container_width=True,
+                                        ):
+                                            # Update timestamp and force video to reload
+                                            st.session_state.current_timestamp = link[
+                                                "seconds"
+                                            ]
+                                            # Scroll back to top where video is
+                                            st.session_state.scroll_to_top = True
+                                            st.rerun()
 
                     st.download_button(
                         label="📥 Download Transcript",
@@ -715,6 +532,7 @@ def app():
                                     st.session_state.transcript_text,
                                     target_language_transcript,
                                     llm_model,
+                                    temperature,
                                 )
                                 st.markdown(
                                     '<div class="transcript-container">',
@@ -758,13 +576,12 @@ def app():
                                     st.session_state.summary,
                                     target_language_summary,
                                     llm_model,
+                                    temperature,
                                 )
-                                with st.container():
-                                    st.markdown(translated_summary)
+                                st.markdown(translated_summary)
 
                 st.markdown("---")
                 st.subheader("💬 Ask Questions About This Video")
-
                 st.info(
                     "Ask questions about the video content, and I'll use the transcript to answer them. "
                     "I can provide information that's explicitly mentioned in the video."
@@ -772,18 +589,13 @@ def app():
 
                 current_chat_history = st.session_state.chat_histories.get(video_id, [])
 
+                # Display existing chat history
                 for message in current_chat_history:
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
 
-                def response_streamer(response_text):
-                    for word in response_text.split():
-                        yield word + " "
-                        time.sleep(0.01)
-
                 if prompt := st.chat_input("Ask a question about this video..."):
                     current_rag_chain = st.session_state.rag_chains.get(video_id)
-
                     if not st.session_state.transcript_text or not current_rag_chain:
                         st.error(
                             "Please fetch and analyze the transcript first before asking questions."
@@ -814,6 +626,11 @@ def app():
                                 else str(result)
                             )
 
+                            def response_streamer(response_text):
+                                for word in response_text.split():
+                                    time.sleep(0.01)
+                                    yield word + " "
+
                             st.write_stream(response_streamer(response))
 
                     current_chat_history.append(
@@ -821,6 +638,20 @@ def app():
                     )
                     st.session_state.chat_histories[video_id] = current_chat_history
 
+
+# Add a callback to handle timestamp clicks
+if "t" in st.query_params:
+    timestamp = st.query_params["t"]
+    try:
+        # Convert the timestamp to seconds
+        if isinstance(timestamp, list):
+            timestamp = timestamp[0]
+        timestamp_seconds = int(timestamp)
+        st.session_state.current_timestamp = timestamp_seconds
+    except ValueError:
+        st.error(f"Invalid timestamp format: {timestamp}")
+    # Force a rerun to update the video
+    st.rerun()
 
 if __name__ == "__main__":
     app()
