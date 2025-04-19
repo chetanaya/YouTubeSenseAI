@@ -42,9 +42,7 @@ def fetch_transcript_whisper(video_url: str) -> str:
         with tempfile.TemporaryDirectory() as temp_dir:
             loader = GenericLoader(
                 YoutubeAudioLoader([video_url], temp_dir),
-                OpenAIWhisperParser(
-                    api_key=os.environ.get("OPENAI_API_KEY")
-                ),  # Pass API key explicitly if needed
+                OpenAIWhisperParser(api_key=os.environ.get("OPENAI_API_KEY")),
             )
             docs = loader.load()
             if docs:
@@ -69,26 +67,10 @@ def fetch_transcript_whisper(video_url: str) -> str:
 def app():
     st.title("📝 YouTube Transcript Analysis (Whisper Edition)")
 
+    # Simplified CSS with only essential styles
     st.markdown(
         """
         <style>
-        .big-font {
-            font-size:20px !important;
-            font-weight: bold;
-        }
-        .container {
-            background-color: #f0f2f6;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .summary-container {
-            background-color: #e6f3ff;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            border-left: 5px solid #2196F3;
-        }
         .transcript-container {
             max-height: 400px;
             overflow-y: auto;
@@ -96,24 +78,8 @@ def app():
             background-color: #f9f9f9;
             border-radius: 5px;
             border: 1px solid #ddd;
-            font-family: monospace; /* Keep monospace for readability */
-            white-space: pre-wrap; /* Ensure wrapping */
-        }
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 24px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            height: 50px;
+            font-family: monospace;
             white-space: pre-wrap;
-            background-color: white;
-            border-radius: 4px 4px 0px 0px;
-            gap: 1px;
-            padding: 10px 16px;
-            font-weight: 600;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: #e6f3ff !important;
-            border-bottom: 2px solid #2196F3 !important;
         }
         </style>
         """,
@@ -183,10 +149,7 @@ def app():
         if not video_id:
             st.error("Invalid YouTube URL. Please enter a valid YouTube video URL.")
         else:
-            st.markdown(
-                f'<iframe width="100%" height="500" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>',
-                unsafe_allow_html=True,
-            )
+            st.video(f"https://www.youtube.com/watch?v={video_id}")
 
             with st.expander("Advanced Summarization Options", expanded=False):
                 custom_prompt = st.text_area(
