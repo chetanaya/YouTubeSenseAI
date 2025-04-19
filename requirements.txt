@@ -17,3 +17,5 @@ faiss-cpu
 yt-dlp
 pydub
 librosa
+langchain-ollama
+ollama

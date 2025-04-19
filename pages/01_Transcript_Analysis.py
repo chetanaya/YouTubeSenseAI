@@ -1,19 +1,20 @@
 import streamlit as st
-import re
 import os
 import time
+import re
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
-from typing import List
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from utils.transcript_utils import (
+    extract_video_id,
+    summarize_transcript,
+    translate_text,
+    create_rag_system,
+)
+from langchain_ollama import ChatOllama
+from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
-from langgraph.graph import END, StateGraph
-from langgraph.checkpoint.memory import MemorySaver
 from modules.nav import Navbar
 
 # Load environment variables
@@ -28,24 +29,6 @@ st.set_page_config(
 )
 
 Navbar()
-
-
-def extract_video_id(url):
-    """Extract YouTube video ID from various URL formats"""
-    patterns = [
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^\?\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^\?\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^\?\s]+)",
-        r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/shorts\/([^\?\s]+)",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-
-    return None
 
 
 def extract_available_languages(error_message):
@@ -138,212 +121,20 @@ def format_transcript_with_timestamps(transcript):
     return formatted_text
 
 
-def summarize_transcript(transcript_text, llm_model="gpt-4o-mini", custom_prompt=None):
-    """Generate a summary and potential Q&A pairs of the transcript using LLM"""
-    if not transcript_text or len(transcript_text) < 50:
-        return {"summary": "Transcript is too short to summarize.", "qa_pairs": ""}
-
-    llm = ChatOpenAI(temperature=0, model=llm_model)
-    output_parser = StrOutputParser()
-
-    max_length = 15000
-    if len(transcript_text) > max_length:
-        transcript_text = transcript_text[:max_length] + "..."
-
-    # --- Summary Generation ---
-    summary_prompt_template = (
-        custom_prompt
-        if custom_prompt
-        else """
-    Analyze the following YouTube video transcript and generate a comprehensive yet concise summary.
-
-    Transcript: {transcript}
-
-    **Comprehensive Summary Generation Process:**
-
-    1.  **Core Topic & Purpose:** Identify the main subject and the video's primary goal (e.g., inform, teach, persuade, review, entertain).
-    2.  **Context & Audience:** Determine the setting (interview, lecture, tutorial, vlog) and intended audience, if discernible.
-    3.  **Key Figures:** Note any important speakers, interviewees, or mentioned individuals.
-    4.  **Structure & Flow:** Understand how the video is organized (e.g., introduction, key sections, conclusion; chronological order; problem/solution).
-    5.  **Main Points & Arguments:** Extract the key messages, central arguments, steps demonstrated, or significant events discussed.
-    6.  **Supporting Details & Keywords:** Include crucial data, evidence, examples, or specific terminology/keywords central to the topic.
-    7.  **Actions, Recommendations & Solutions:** Capture any calls to action, solutions proposed, tips, or specific advice given.
-    8.  **Broader Themes & Implications:** Recognize underlying themes, the video's relevance or timeliness, and any future predictions or outlooks mentioned.
-    9.  **Key Visuals/Audio (If Inferrable):** Briefly note if the transcript implies reliance on essential visuals (graphs, demonstrations) or specific audio cues, if central to understanding.
-
-    **Formatting and Style Guidelines:**
-
-    *   **Objectivity:** Report neutrally what the transcript says. Attribute claims or opinions to the video's speakers (e.g., "The speaker argues...").
-    *   **Conciseness:** Focus on the most valuable information for someone who hasn't seen the video. Omit fluff, excessive detail, and repetitive points.
-    *   **Clarity:** Use clear headings/subheadings (Markdown). Employ bullet points for lists (key takeaways, steps). Use brief paragraphs for context.
-    *   **Emphasis:** **Bold** critical terms, conclusions, or key takeaways.
-
-    **Generated Summary:**
-    """
-    )
-    summary_prompt = ChatPromptTemplate.from_template(summary_prompt_template)
-    summary_chain = summary_prompt | llm | output_parser
-
-    # --- Q&A Generation ---
-    qa_prompt_template = """
-    Based *only* on the provided YouTube video transcript, generate 3-5 insightful questions that a viewer might have after watching. For each question, provide a concise answer derived *directly* from the transcript content. Do not add information not present in the transcript.
-
-    Transcript: {transcript}
-
-    Format the Q&A pairs clearly:
-    **Q1:** [Question 1]?
-    **A1:** [Answer 1 derived from transcript].
-
-    **Q2:** [Question 2]?
-    **A2:** [Answer 2 derived from transcript].
-    ...
-
-    **Generated Q&A Pairs:**
-    """
-    qa_prompt = ChatPromptTemplate.from_template(qa_prompt_template)
-    qa_chain = qa_prompt | llm | output_parser
-
-    summary_result = "Error generating summary."
-    qa_result = "Error generating Q&A."
-
-    try:
-        # Invoke summary chain
-        summary_result = summary_chain.invoke({"transcript": transcript_text})
-    except Exception as e:
-        st.error(f"Error generating summary: {str(e)}")
-        summary_result = "Unable to generate summary due to an error."
-
-    try:
-        # Invoke Q&A chain
-        qa_result = qa_chain.invoke({"transcript": transcript_text})
-    except Exception as e:
-        st.error(f"Error generating Q&A: {str(e)}")
-        qa_result = "Unable to generate Q&A pairs due to an error."
-
-    return {"summary": summary_result.strip(), "qa_pairs": qa_result.strip()}
+def get_llm(model_name, temperature=0):
+    """Initialize the appropriate LLM based on model selection"""
+    if model_name == "deepseek-r1-ollama":
+        return ChatOllama(model="deepseek-r1:latest", temperature=temperature)
+    else:
+        return ChatOpenAI(temperature=temperature, model=model_name)
 
 
-def translate_text(text, target_language, llm_model="gpt-4o-mini"):
-    """Translate text to the target language using LLM"""
-    if not text:
-        return "No text to translate."
-
-    llm = ChatOpenAI(temperature=0, model=llm_model)
-
-    max_length = 15000
-    if len(text) > max_length:
-        text = text[:max_length] + "..."
-
-    prompt = ChatPromptTemplate.from_template(
-        """Translate the following text to {language}. Maintain the formatting and structure as much as possible:
-
-        {text}
-
-        Translation:
-        """
-    )
-
-    chain = prompt | llm
-
-    try:
-        response = chain.invoke({"language": target_language, "text": text})
-        return response.content
-    except Exception as e:
-        st.error(f"Error translating text: {str(e)}")
-        return "Unable to translate text due to an error."
-
-
-def create_rag_system(transcript_text: str, llm_model: str = "gpt-4o-mini"):
-    """Create a RAG system with chat history for transcript Q&A"""
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    chunks = text_splitter.split_text(transcript_text)
-
-    embeddings = OpenAIEmbeddings()
-    vectorstore = FAISS.from_texts(chunks, embeddings)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-
-    llm = ChatOpenAI(temperature=0, model=llm_model)
-
-    def retrieve(state):
-        query = (
-            state["messages"][-1].content
-            if isinstance(state["messages"][-1], HumanMessage)
-            else ""
-        )
-        docs = retriever.invoke(query)
-        context = "\n\n".join([doc.page_content for doc in docs])
-        return {"context": context}
-
-    def generate_answer(state):
-        context = state.get("context", "")
-        human_message = next(
-            (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-            None,
-        )
-        if not human_message:
-            return {
-                "messages": state["messages"]
-                + [
-                    AIMessage(
-                        content="I couldn't understand your question. Please try again."
-                    )
-                ]
-            }
-
-        messages = [
-            AIMessage(
-                content="I am an AI assistant that helps answer questions about the YouTube video transcript."
-            ),
-            HumanMessage(
-                content=f"""First, analyze the provided context from the video transcript and identify 2-3 key potential questions and their answers that could be derived from this specific context.
-
-            Context:
-            {context}
-
-            Potential Q&A based on context:
-            1. Q: ... A: ...
-            2. Q: ... A: ...
-            3. Q: ... A: ...
-
-            Now, answer the user's question based *only* on the provided context. If the context doesn't contain the answer, state that clearly. Do not make up information.
-
-            User's Question: {human_message.content}
-
-            Final Answer:"""
-            ),
-        ]
-
-        answer = llm.invoke(messages).content
-        return {"messages": state["messages"] + [AIMessage(content=answer)]}
-
-    from typing import TypedDict
-
-    class GraphState(TypedDict):
-        messages: List
-        context: str
-
-    workflow = StateGraph(state_schema=GraphState)
-
-    workflow.add_node("retrieve", retrieve)
-    workflow.add_node("generate_answer", generate_answer)
-
-    workflow.set_entry_point("retrieve")
-    workflow.add_edge("retrieve", "generate_answer")
-    workflow.add_edge("generate_answer", END)
-
-    rag_chain = workflow.compile(checkpointer=MemorySaver())
-
-    def invoke_rag_chain(messages, thread_id: str):
-        config = {"configurable": {"thread_id": thread_id}}
-        initial_state = {"messages": messages, "context": ""}
-        result = rag_chain.invoke(initial_state, config=config)
-        return (
-            result["messages"][-1]
-            if result["messages"]
-            else AIMessage(content="No response generated.")
-        )
-
-    return invoke_rag_chain
+def get_embeddings(model_name):
+    """Initialize the appropriate embeddings model based on selection"""
+    if model_name == "deepseek-r1-ollama":
+        return OllamaEmbeddings(model="deepseek-r1:latest")
+    else:
+        return OpenAIEmbeddings()
 
 
 def app():
@@ -441,8 +232,34 @@ def app():
 
         st.header("LLM Model Settings")
         llm_model = st.selectbox(
-            "LLM Model", ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4", "gpt-4o"], index=0
+            "LLM Model",
+            ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4", "gpt-4o", "deepseek-r1-ollama"],
+            index=0,
         )
+
+        temperature = st.slider(
+            "Temperature", min_value=0.0, max_value=1.0, value=0.0, step=0.1
+        )
+
+        if llm_model == "deepseek-r1-ollama":
+            st.info(
+                "Using local Ollama with deepseek-r1:latest model. Make sure Ollama is running with this model installed."
+            )
+            if st.button("Check Ollama Status"):
+                try:
+                    test_llm = ChatOllama(model="deepseek-r1:latest")
+                    test_msg = test_llm.invoke("Hi")
+                    st.success(
+                        f"Ollama is running correctly! Response: {test_msg.content[:50]}..."
+                    )
+                except Exception as e:
+                    st.error(f"Error connecting to Ollama: {str(e)}")
+                    st.markdown("""
+                    ### Troubleshooting:
+                    1. Make sure Ollama is installed and running
+                    2. Install the model with: `ollama pull deepseek-r1:latest`
+                    3. Check Ollama server status
+                    """)
 
         st.header("Language Settings")
         transcript_language = st.selectbox(
@@ -567,7 +384,10 @@ def app():
 
                         st.write("Generating summary and Q&A insights...")
                         analysis_result = summarize_transcript(
-                            st.session_state.transcript_text, llm_model, custom_prompt
+                            st.session_state.transcript_text,
+                            llm_model,
+                            custom_prompt,
+                            temperature,
                         )
                         st.session_state.summary = analysis_result.get(
                             "summary", "Summary generation failed."
@@ -578,7 +398,7 @@ def app():
 
                         st.write("Setting up question answering system...")
                         st.session_state.rag_chains[video_id] = create_rag_system(
-                            st.session_state.transcript_text, llm_model
+                            st.session_state.transcript_text, llm_model, temperature
                         )
 
                         if video_id not in st.session_state.chat_histories:
@@ -715,6 +535,7 @@ def app():
                                     st.session_state.transcript_text,
                                     target_language_transcript,
                                     llm_model,
+                                    temperature,
                                 )
                                 st.markdown(
                                     '<div class="transcript-container">',
@@ -758,6 +579,7 @@ def app():
                                     st.session_state.summary,
                                     target_language_summary,
                                     llm_model,
+                                    temperature,
                                 )
                                 with st.container():
                                     st.markdown(translated_summary)
