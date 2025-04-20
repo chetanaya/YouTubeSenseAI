@@ -17,6 +17,7 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from modules.nav import Navbar
 from streamlit_scroll_to_top import scroll_to_here
+from utils.history_manager import render_video_history_widget
 
 # Load environment variables
 load_dotenv()
@@ -244,15 +245,24 @@ def app():
             index=0,
         )
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.subheader("Enter YouTube Video URL")
-        video_url = st.text_input(
-            "Paste the YouTube video URL here",
-            placeholder="https://www.youtube.com/watch?v=...",
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
+        # Add video history to sidebar
+        render_video_history_widget(analysis_method="youtube_api")
+
+    # Check if URL is provided in query parameters
+    if "url" in st.query_params:
+        video_url = st.query_params["url"]
+        # Remove the URL from query params to avoid loops
+        st.query_params.clear()
+    else:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("Enter YouTube Video URL")
+            video_url = st.text_input(
+                "Paste the YouTube video URL here",
+                placeholder="https://www.youtube.com/watch?v=...",
+            )
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
 
     if video_url:
         video_id = extract_video_id(video_url)
@@ -366,6 +376,32 @@ def app():
                         st.write("Setting up question answering system...")
                         st.session_state.rag_chains[video_id] = create_rag_system(
                             st.session_state.transcript_text, llm_model, temperature
+                        )
+
+                        # Add video to history
+                        if "history_manager" not in st.session_state:
+                            from utils.history_manager import VideoHistoryManager
+
+                            st.session_state.history_manager = VideoHistoryManager()
+
+                        # Get video title from YouTube if possible (simplified here)
+                        video_title = f"YouTube Video {video_id}"
+
+                        # Add to history
+                        st.session_state.history_manager.add_video(
+                            video_id=video_id,
+                            video_url=video_url,
+                            analysis_method="youtube_api",
+                            title=video_title,
+                            metadata={
+                                "language_used": used_language,
+                                "transcript_length": len(
+                                    st.session_state.transcript_text
+                                ),
+                                "summary_length": len(st.session_state.summary)
+                                if hasattr(st.session_state, "summary")
+                                else 0,
+                            },
                         )
 
                         status.update(

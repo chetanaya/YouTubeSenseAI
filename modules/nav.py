@@ -14,3 +14,8 @@ def Navbar():
             label="YouTube Transcript Analyzer (Whisper)",
             icon="🎬",
         )
+        st.page_link(
+            "pages/03_Transcript_Analysis_Assembly_AI.py",
+            label="YouTube Transcript Analyzer (Assembly AI)",
+            icon="🎬",
+        )
