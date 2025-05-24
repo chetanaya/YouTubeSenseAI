@@ -18,7 +18,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict
 from dotenv import load_dotenv
 from modules.nav import Navbar
-from utils.history_manager import render_video_history_widget
 
 # Load environment variables
 load_dotenv()
@@ -1097,9 +1096,6 @@ def app():
         }.get(x, x),
         index=0,
     )
-
-    # Video history
-    render_video_history_widget(analysis_method="playlist")
 
     # Main interface
     st.markdown("### 🎯 Enter Playlist URL")
