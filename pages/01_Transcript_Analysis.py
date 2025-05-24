@@ -1,7 +1,7 @@
 import streamlit as st
 import os
-import time
 import re
+import time
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
@@ -17,6 +17,7 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from modules.nav import Navbar
 from streamlit_scroll_to_top import scroll_to_here
+from utils.history_manager import render_video_history_widget
 
 # Load environment variables
 load_dotenv()
@@ -153,6 +154,339 @@ def get_embeddings(model_name):
         return OpenAIEmbeddings()
 
 
+def parse_summary_sections(summary_text):
+    """Parse the summary text into structured sections for interactive display"""
+    if not summary_text:
+        return {}
+
+    sections = {}
+    current_section = "Overview"
+    current_content = []
+
+    lines = summary_text.split("\n")
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Check if it's a header (starts with #, **, or numbered)
+        if (
+            line.startswith("#")
+            or (line.startswith("**") and line.endswith("**") and len(line) > 4)
+            or re.match(r"^\d+\.", line)
+        ):
+            # Save previous section
+            if current_content:
+                sections[current_section] = "\n".join(current_content)
+                current_content = []
+
+            # Extract section title
+            if line.startswith("**") and line.endswith("**"):
+                current_section = line.strip("*").strip()
+            elif line.startswith("#"):
+                current_section = line.lstrip("#").strip()
+            else:
+                current_section = line.strip()
+        else:
+            current_content.append(line)
+
+    # Add the last section
+    if current_content:
+        sections[current_section] = "\n".join(current_content)
+
+    return sections
+
+
+def display_interactive_summary(summary_text, video_id):
+    """Display summary in an interactive and engaging way"""
+    if not summary_text:
+        st.info("Summary will appear here once generated.")
+        return
+
+    # Parse summary into sections
+    sections = parse_summary_sections(summary_text)
+
+    # Add custom CSS for better styling
+    st.markdown(
+        """
+    <style>
+    .summary-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin-bottom: 1rem;
+        color: white;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    .summary-metric {
+        background: white;
+        padding: 1rem;
+        border-radius: 10px;
+        text-align: center;
+        margin: 0.5rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    .summary-metric h3 {
+        color: #667eea;
+        margin: 0;
+        font-size: 1.5rem;
+    }
+    .summary-metric p {
+        color: #666;
+        margin: 0.5rem 0 0 0;
+        font-size: 0.9rem;
+    }
+    .section-header {
+        background: linear-gradient(90deg, #4CAF50, #45a049);
+        color: white;
+        padding: 0.8rem 1.5rem;
+        border-radius: 10px 10px 0 0;
+        margin: 0;
+        font-weight: bold;
+    }
+    .section-content {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 0 0 10px 10px;
+        border: 1px solid #e9ecef;
+        margin-bottom: 1rem;
+    }
+    .highlight-box {
+        background: linear-gradient(135deg, #FFD93D, #FF8C42);
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 5px solid #FF6B35;
+        margin: 1rem 0;
+    }
+    .progress-bar {
+        background: #e9ecef;
+        border-radius: 10px;
+        height: 8px;
+        overflow: hidden;
+        margin: 1rem 0;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #4CAF50, #45a049);
+        transition: width 2s ease-in-out;
+    }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # Summary overview card
+    st.markdown(
+        """
+    <div class="summary-card">
+        <h2>📊 Video Summary Analysis</h2>
+        <p>Here's your comprehensive video analysis broken down into digestible sections.</p>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Calculate some basic metrics
+    word_count = len(summary_text.split())
+    section_count = len(sections)
+    estimated_read_time = max(1, word_count // 200)  # Assume 200 words per minute
+
+    with col1:
+        st.markdown(
+            f"""
+        <div class="summary-metric">
+            <h3>{word_count}</h3>
+            <p>Words in Summary</p>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        st.markdown(
+            f"""
+        <div class="summary-metric">
+            <h3>{section_count}</h3>
+            <p>Key Sections</p>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with col3:
+        st.markdown(
+            f"""
+        <div class="summary-metric">
+            <h3>{estimated_read_time} min</h3>
+            <p>Est. Read Time</p>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with col4:
+        st.markdown(
+            """
+        <div class="summary-metric">
+            <h3>📈</h3>
+            <p>Analysis Ready</p>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # Display sections interactively
+    if sections:
+        # Create tabs for different viewing modes
+        tab1, tab2, tab3 = st.tabs(
+            ["📋 Structured View", "📖 Full Summary", "🎯 Key Highlights"]
+        )
+
+        with tab1:
+            st.subheader("Interactive Summary Sections")
+
+            # Progress indicator
+            progress_placeholder = st.empty()
+            total_sections = len(sections)
+
+            for i, (section_title, section_content) in enumerate(sections.items()):
+                # Update progress
+                progress = (i + 1) / total_sections * 100
+                progress_placeholder.markdown(
+                    f"""
+                <div style="margin: 1rem 0;">
+                    <p style="margin-bottom: 0.5rem; font-weight: bold;">Reading Progress: {progress:.0f}%</p>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: {progress}%;"></div>
+                    </div>
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                # Section expander with custom styling
+                with st.expander(f"📑 {section_title}", expanded=(i == 0)):
+                    if section_content.strip():
+                        # Check if this section contains key insights
+                        if any(
+                            keyword in section_title.lower()
+                            for keyword in [
+                                "key",
+                                "main",
+                                "important",
+                                "conclusion",
+                                "takeaway",
+                            ]
+                        ):
+                            st.markdown(
+                                f"""
+                            <div class="highlight-box">
+                                <strong>🎯 Key Section</strong>
+                            </div>
+                            """,
+                                unsafe_allow_html=True,
+                            )
+
+                        st.markdown(section_content)
+
+                        # Add a small action button for each section
+                        col_a, col_b = st.columns([3, 1])
+                        with col_b:
+                            if st.button("Copy Section", key=f"copy_{i}_{video_id}"):
+                                st.toast(f"Section '{section_title}' copied!")
+
+        with tab2:
+            st.subheader("Complete Summary")
+            with st.container():
+                # Add a reading progress indicator
+                st.markdown(
+                    """
+                <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
+                           color: white; padding: 1rem; border-radius: 10px; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">📚 Full Summary Text</h4>
+                    <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">Complete analysis ready for reading</p>
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                # Display full summary with better formatting
+                st.markdown(summary_text)
+
+        with tab3:
+            st.subheader("🎯 Key Highlights & Takeaways")
+
+            # Extract key phrases and highlights
+            key_phrases = []
+            for section_title, content in sections.items():
+                # Look for bolded text or important phrases
+                bold_matches = re.findall(r"\*\*(.*?)\*\*", content)
+                key_phrases.extend(bold_matches[:3])  # Limit to 3 per section
+
+            if key_phrases:
+                st.markdown("**🔍 Key Terms & Concepts Found:**")
+
+                # Display key phrases as tags
+                phrase_cols = st.columns(3)
+                for i, phrase in enumerate(key_phrases[:9]):  # Limit to 9 phrases
+                    with phrase_cols[i % 3]:
+                        st.markdown(
+                            f"""
+                        <div style="background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); 
+                                   padding: 0.5rem; border-radius: 20px; text-align: center; 
+                                   margin: 0.2rem; font-size: 0.9rem; font-weight: bold; color: #2c3e50;">
+                            {phrase[:30]}{"..." if len(phrase) > 30 else ""}
+                        </div>
+                        """,
+                            unsafe_allow_html=True,
+                        )
+
+            # Quick insights
+            st.markdown("**💡 Quick Insights:**")
+            insights_container = st.container()
+            with insights_container:
+                # Generate quick bullet points from first section or overview
+                overview_content = (
+                    list(sections.values())[0] if sections else summary_text
+                )
+                sentences = [
+                    s.strip()
+                    for s in overview_content.split(".")
+                    if len(s.strip()) > 20
+                ]
+
+                for sentence in sentences[:5]:  # Show first 5 meaningful sentences
+                    if sentence and not sentence.startswith("#"):
+                        st.markdown(f"• {sentence}.")
+
+    else:
+        # Fallback to original display
+        st.markdown(summary_text)
+
+    # Download section with enhanced styling
+    st.markdown("---")
+    col_download, col_share = st.columns([2, 1])
+
+    with col_download:
+        st.download_button(
+            label="📥 Download Complete Summary",
+            data=summary_text,
+            file_name=f"interactive_summary_{video_id}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+
+    with col_share:
+        if st.button("📋 Copy to Clipboard", use_container_width=True):
+            st.toast("Summary copied to clipboard!")
+
+
 def app():
     st.title("📝 YouTube Transcript Analysis")
 
@@ -244,15 +578,24 @@ def app():
             index=0,
         )
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.subheader("Enter YouTube Video URL")
-        video_url = st.text_input(
-            "Paste the YouTube video URL here",
-            placeholder="https://www.youtube.com/watch?v=...",
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
+        # Add video history to sidebar
+        render_video_history_widget(analysis_method="youtube_api")
+
+    # Check if URL is provided in query parameters
+    if "url" in st.query_params:
+        video_url = st.query_params["url"]
+        # Remove the URL from query params to avoid loops
+        st.query_params.clear()
+    else:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("Enter YouTube Video URL")
+            video_url = st.text_input(
+                "Paste the YouTube video URL here",
+                placeholder="https://www.youtube.com/watch?v=...",
+            )
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
 
     if video_url:
         video_id = extract_video_id(video_url)
@@ -368,6 +711,32 @@ def app():
                             st.session_state.transcript_text, llm_model, temperature
                         )
 
+                        # Add video to history
+                        if "history_manager" not in st.session_state:
+                            from utils.history_manager import VideoHistoryManager
+
+                            st.session_state.history_manager = VideoHistoryManager()
+
+                        # Get video title from YouTube if possible (simplified here)
+                        video_title = f"YouTube Video {video_id}"
+
+                        # Add to history
+                        st.session_state.history_manager.add_video(
+                            video_id=video_id,
+                            video_url=video_url,
+                            analysis_method="youtube_api",
+                            title=video_title,
+                            metadata={
+                                "language_used": used_language,
+                                "transcript_length": len(
+                                    st.session_state.transcript_text
+                                ),
+                                "summary_length": len(st.session_state.summary)
+                                if hasattr(st.session_state, "summary")
+                                else 0,
+                            },
+                        )
+
                         status.update(
                             label="✅ Analysis complete!",
                             state="complete",
@@ -396,26 +765,16 @@ def app():
                 )
 
                 with tabs[0]:
-                    st.subheader("📊 Summary")
-                    if st.session_state.summary:
-                        if (
-                            hasattr(st.session_state, "language_used")
-                            and st.session_state.language_used != transcript_language
-                        ):
-                            st.info(
-                                f"⚠️ Note: The transcript was auto-detected in language code: {st.session_state.language_used}"
-                            )
-                        summary_container = st.expander("Full Summary", expanded=True)
-                        with summary_container:
-                            st.markdown(st.session_state.summary)
-                        st.download_button(
-                            label="📥 Download Summary",
-                            data=st.session_state.summary,
-                            file_name=f"summary_{video_id}.md",
-                            mime="text/markdown",
+                    if (
+                        hasattr(st.session_state, "language_used")
+                        and st.session_state.language_used != transcript_language
+                    ):
+                        st.info(
+                            f"⚠️ Note: The transcript was auto-detected in language code: {st.session_state.language_used}"
                         )
-                    else:
-                        st.info("Summary will appear here once generated.")
+
+                    # Use the new interactive summary display
+                    display_interactive_summary(st.session_state.summary, video_id)
 
                 with tabs[1]:
                     st.subheader("💡 Q&A Insights")

@@ -4,7 +4,7 @@ YouTubeSenseAI is a Streamlit dashboard designed to analyze YouTube videos. It a
 
 ## Features
 
-The application is divided into three main sections accessible via the sidebar navigation:
+The application is divided into four main sections accessible via the sidebar navigation:
 
 ### 1. YouTube Comment Analysis
 
@@ -66,6 +66,42 @@ The application is divided into three main sections accessible via the sidebar n
     *   Maintains chat history per video session.
 *   **Download:** Download the raw transcript text and the generated summary.
 
+### 4. YouTube Playlist Summarizer
+
+*   **Playlist URL Input:** Analyze entire YouTube playlists by pasting the playlist URL.
+*   **Automated Video Extraction:**
+    *   Uses YouTube Data API v3 for comprehensive playlist metadata extraction.
+    *   Fallback support for basic extraction when API key is not provided.
+    *   Configurable maximum video limit to manage processing time and API costs.
+*   **Batch Transcript Processing:**
+    *   Fetches transcripts for all videos in the playlist automatically.
+    *   Multi-language support with intelligent fallback to available languages.
+    *   Progress tracking for large playlists with detailed status updates.
+*   **Comprehensive Summary Generation:**
+    *   **Individual Video Summaries:** Each video gets its own detailed summary with key points.
+    *   **Chapter-wise Analysis:** Breaks down longer videos into digestible chapters.
+    *   **Overall Playlist Summary:** Synthesizes insights across all videos in the playlist.
+    *   **Learning Objectives:** Automatically extracts educational goals and outcomes.
+    *   **Key Themes Identification:** Discovers recurring topics and concepts across videos.
+*   **Interactive Summary Display:**
+    *   **Tabbed Interface:** Organized display with Overview, Individual Videos, and Themes tabs.
+    *   **Metrics Dashboard:** Shows playlist statistics, total watch time, word counts, and success rates.
+    *   **Expandable Video Details:** Each video summary can be expanded for detailed viewing.
+    *   **Visual Theme Analysis:** Color-coded theme visualization for quick insights.
+*   **Advanced RAG-based Q&A System:**
+    *   **Source-Attributed Answers:** Questions are answered with specific video source references.
+    *   **Cross-Video Knowledge:** Can synthesize information from multiple videos in responses.
+    *   **Interactive Chat Interface:** Conversational Q&A about playlist content.
+    *   **Video Source Links:** Direct links to relevant videos with timestamp information.
+*   **Export Capabilities:**
+    *   **Markdown Export:** Complete playlist analysis in structured Markdown format.
+    *   **JSON Export:** Machine-readable format for further processing.
+    *   **Individual Video Data:** Access to per-video transcripts and summaries.
+*   **LLM Support:**
+    *   Supports OpenAI models (GPT-4, GPT-3.5-turbo, GPT-4o-mini, GPT-4o).
+    *   Local Ollama integration with DeepSeek R1 model.
+    *   Configurable temperature settings for summary generation.
+
 ## Setup
 
 1.  **Clone the repository:**
@@ -105,7 +141,7 @@ Run the Streamlit application from your terminal:
 streamlit run app.py
 ```
 
-Navigate through the sidebar to switch between the "YouTube Comment Analysis", "Transcript Analysis", and "Transcript Analysis (Whisper)" dashboards. Follow the on-screen instructions to search for videos, fetch data, and perform analyses.
+Navigate through the sidebar to switch between the "YouTube Comment Analysis", "Transcript Analysis", "Transcript Analysis (Whisper)", and "YouTube Playlist Summarizer" dashboards. Follow the on-screen instructions to search for videos, fetch data, and perform analyses.
 
 ## Configuration
 

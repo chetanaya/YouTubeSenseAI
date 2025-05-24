@@ -17,6 +17,7 @@ from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.parsers.audio import OpenAIWhisperParser
 import shutil  # Import shutil to check for ffmpeg
 from modules.nav import Navbar
+from utils.history_manager import render_video_history_widget
 
 # Load environment variables
 load_dotenv()
@@ -130,18 +131,28 @@ def app():
         )
         # Removed transcript language selection
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown(
-            '<p class="big-font">Enter YouTube Video URL</p>', unsafe_allow_html=True
-        )
-        video_url = st.text_input(
-            "Paste the YouTube video URL here",
-            placeholder="https://www.youtube.com/watch?v=...",
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
+        # Add video history to sidebar
+        render_video_history_widget(analysis_method="whisper")
+
+    # Check if URL is provided in query parameters
+    if "url" in st.query_params:
+        video_url = st.query_params["url"]
+        # Remove the URL from query params to avoid loops
+        st.query_params.clear()
+    else:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(
+                '<p class="big-font">Enter YouTube Video URL</p>',
+                unsafe_allow_html=True,
+            )
+            video_url = st.text_input(
+                "Paste the YouTube video URL here",
+                placeholder="https://www.youtube.com/watch?v=...",
+            )
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
 
     if video_url:
         video_id = extract_video_id(video_url)
@@ -233,6 +244,31 @@ def app():
 
                         if video_id not in st.session_state.chat_histories:
                             st.session_state.chat_histories[video_id] = []
+
+                        # Add video to history
+                        if "history_manager" not in st.session_state:
+                            from utils.history_manager import VideoHistoryManager
+
+                            st.session_state.history_manager = VideoHistoryManager()
+
+                        # Get video title from YouTube if possible (simplified here)
+                        video_title = f"Whisper Analysis: {video_id}"
+
+                        # Add to history
+                        st.session_state.history_manager.add_video(
+                            video_id=video_id,
+                            video_url=video_url,
+                            analysis_method="whisper",
+                            title=video_title,
+                            metadata={
+                                "transcript_length": len(
+                                    st.session_state.transcript_text
+                                ),
+                                "summary_length": len(st.session_state.summary)
+                                if hasattr(st.session_state, "summary")
+                                else 0,
+                            },
+                        )
 
                         status.update(
                             label="✅ Analysis complete!",

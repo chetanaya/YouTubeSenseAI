@@ -20,3 +20,4 @@ librosa
 langchain-ollama
 ollama
 streamlit-scroll-to-top
+assemblyai
