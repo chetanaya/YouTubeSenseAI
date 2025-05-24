@@ -19,3 +19,8 @@ def Navbar():
             label="YouTube Transcript Analyzer (Assembly AI)",
             icon="🎬",
         )
+        st.page_link(
+            "pages/04_Playlist_Summarizer.py",
+            label="YouTube Playlist Summarizer",
+            icon="🎬",
+        )
